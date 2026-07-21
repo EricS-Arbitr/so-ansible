@@ -1,0 +1,50 @@
+# ============================================================
+# so-ansible — Ansible inventory
+# ============================================================
+# Blueprint: blueprints/so_arbitr_dev.yml (ARBITR_SO_DEV)
+# Mgmt plane: 10.255.240.0/20 — ansible_host = mgmt IP (per host_vars)
+# Ansible controller dual-homed: 10.10.10.10 (control-10) + 10.255.240.157 (mgmt)
+# ============================================================
+
+# ------------------------------------------------------------
+# Ansible controller itself — needed for local-mirror role.
+# Runs `so_apt_mirror` (nginx serving the SO ISO).
+# ------------------------------------------------------------
+[ansible_controller]
+ansible ansible_connection=local
+
+# ------------------------------------------------------------
+# Network — router-0 is VyOS; runs vyos_mirror role (GRE + tc mirred).
+# ------------------------------------------------------------
+[net_vyos]
+router-0
+
+# ------------------------------------------------------------
+# Security Onion 2.4.x — distributed deploy.
+# so_manager MUST deploy before so_search + so_sensor (nodes join manager).
+# ------------------------------------------------------------
+[so_manager]
+so-manager
+
+[so_search]
+so-search
+
+[so_sensor]
+so-sensor-1
+
+# All SO Linux nodes (for baseline hardening / common role application).
+[so_all:children]
+so_manager
+so_search
+so_sensor
+
+# ------------------------------------------------------------
+# Placeholder Windows targets — NOT provisioned by this project (per
+# project_so_architecture_decisions memory, decision #3: Windows out of
+# scope). Included here so the elastic_agent role has enrollment targets
+# once we're ready to demo endpoint telemetry.
+# ------------------------------------------------------------
+[windows_placeholder]
+DC01
+ops-wks-01
+eng-wks-01

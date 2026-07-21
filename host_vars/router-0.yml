@@ -1,0 +1,29 @@
+---
+# host_vars/router-0.yml — VyOS router (RC-VyOS-Router:1.1.0)
+# Image: RC-VyOS-Router:1.1.0
+# Interfaces:
+#   eth1 Operations  172.16.8.1/24  (gateway)
+#   eth2 Engineering 172.16.6.1/24  (gateway)
+#   eth3 Services    172.16.7.1/24  (gateway)
+#   eth4 security    172.16.5.1/24  (gateway)
+# Mgmt: 10.255.240.165/20 (position LAST)
+ansible_host: "10.255.240.165"
+ansible_user: "vyos"
+ansible_connection: "network_cli"
+ansible_network_os: "vyos.vyos.vyos"
+
+# Interfaces we want to mirror to the sensor via GRE.
+# vyos_mirror role reads this list to build tc mirred rules + tunnel.
+vyos_mirror_source_interfaces:
+  - eth1   # Operations subnet ingress+egress
+  - eth2   # Engineering subnet ingress+egress
+  - eth3   # Services subnet (DC + AD)
+  # eth4 (security) intentionally excluded — that's the SO stack itself
+  # and would create noise / feedback loops.
+
+# GRE tunnel to so-sensor-1.
+vyos_gre_source_ip: "172.16.5.1"       # router's security-subnet IP
+vyos_gre_remote_ip: "172.16.5.20"      # so-sensor-1 prod IP
+vyos_gre_local_addr: "10.100.0.1"      # router-side of tunnel
+vyos_gre_remote_addr: "10.100.0.2"     # sensor-side of tunnel
+vyos_gre_tunnel_prefix: 30

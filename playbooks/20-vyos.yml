@@ -1,0 +1,20 @@
+---
+# =========================================================================
+# 20-vyos.yml — router-0 GRE tunnel + tc mirror rules to sensor
+# =========================================================================
+# Configures a GRE tunnel from router-0's security-subnet IP (172.16.5.1)
+# to so-sensor-1 (172.16.5.20). tc mirred rules on each source interface
+# duplicate ingress+egress packets into the tunnel. Sensor terminates
+# the GRE and Suricata/Zeek see decapsulated traffic.
+#
+# Idempotent — vyos_mirror role queries existing config before applying.
+# Ordering matters: MUST run before sensor's so-setup binds Suricata,
+# otherwise the monitor interface won't be up during sensor install.
+# =========================================================================
+
+- name: VyOS mirror config on router-0 (GRE + tc mirred)
+  hosts: net_vyos
+  gather_facts: false
+  connection: network_cli
+  roles:
+    - vyos_mirror

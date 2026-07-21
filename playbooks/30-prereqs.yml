@@ -1,0 +1,20 @@
+---
+# =========================================================================
+# 30-prereqs.yml — baseline hardening + SO-specific prereqs on all Linux
+# nodes (manager, search, sensor)
+# =========================================================================
+# `common` neutralizes cloud-init networking, applies netplan for the
+# in-game static IP + mgmt NIC, installs apt updates. `init` handles
+# hostname + basic /etc/hosts. `so_base` layers SO-specific prep: pulls
+# the ISO from the mirror, mounts it locally, populates /etc/hosts with
+# the other SO nodes, opens ephemeral so-firewall pinholes.
+# =========================================================================
+
+- name: SO Linux node baseline (common + init + so_base)
+  hosts: so_all
+  become: true
+  gather_facts: true
+  roles:
+    - common       # bundles hostname.yml + linux.yml (netplan + apt + timezone)
+    - init         # cross-platform bootstrap
+    - so_base      # SO-specific: pull ISO from mirror, mount /nsm/repo, /etc/hosts

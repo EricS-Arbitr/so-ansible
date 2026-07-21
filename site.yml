@@ -1,0 +1,23 @@
+---
+# =========================================================================
+# site.yml — top-level deploy sequence for so-ansible
+# =========================================================================
+# Deploy order matters. Each play depends on the prior:
+#   10-mirror     stages the SO ISO on ansible controller
+#   20-vyos       VyOS GRE tunnel + tc mirror rules to sensor
+#   30-prereqs    baseline (common/init/hostname) on SO Linux nodes
+#   40-manager    so-setup MANAGER first (search + sensor join it)
+#   50-nodes      so-setup SEARCH + SENSOR (idempotent existing-deployment)
+#   60-verify     end-to-end checks (so-status, elastic health, sensor pcap)
+#
+# Windows / elastic-agent enrollment lives in a separate playbook
+# (playbooks/70-elastic-agents.yml) — run only after decision to bring
+# Windows into scope (currently DEFERRED per project_so_architecture_decisions).
+# =========================================================================
+
+- import_playbook: playbooks/10-mirror.yml
+- import_playbook: playbooks/20-vyos.yml
+- import_playbook: playbooks/30-prereqs.yml
+- import_playbook: playbooks/40-manager.yml
+- import_playbook: playbooks/50-nodes.yml
+- import_playbook: playbooks/60-verify.yml

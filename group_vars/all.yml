@@ -1,0 +1,59 @@
+---
+# =========================================================================
+# group_vars/all.yml — cross-cutting defaults for so-ansible
+# =========================================================================
+# Per project_so_architecture_decisions memory (2026-07-20):
+#   1. Ansible on 10.255.240.157 dual-homed on mgmt + control-10
+#   2. so-setup driven by preseed files (schema pending research)
+#   3. Windows out of scope for THIS project
+#   4. Updates via ansible-hosted local mirror at http://10.255.240.157/
+#   5. Traffic capture via VyOS GRE-mirror to sensor + Elastic Agent on endpoints
+# =========================================================================
+
+# --- Security Onion version + install source ---
+# IMPORTANT: the flexible `automation/` mechanism we depend on (positional
+# arg to so-setup that bash-sources a template) exists ONLY on master, not
+# in any tagged release including 2.4.141, 2.4.211, or 3.1.0. Confirmed
+# 2026-07-20 by inspecting so-setup source at each tag. See
+# UPSTREAM_FIXES.md · 2026-07-20 entry.
+#
+# We pin to a specific master commit SHA and snapshot everything into
+# files/setup-automation-source/. On upgrades, refresh SHA + re-snapshot
+# + diff. See files/setup-automation-source/SOURCE_SHA.txt for the pin.
+so_git_ref: "94c7dabd9ed97f134ceadfd00d0410665d898db7"  # master @ 2026-07-20
+so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
+
+# ISO version — we pair master's setup mechanism with the LATEST tagged
+# SO release ISO. The customer's legacy platform used 2.4.141 per the
+# walkthrough doc, but we have no reason to constrain ourselves there
+# since we install from base Ubuntu.
+so_iso_version: "2.4.211-20260407"
+so_iso_filename: "securityonion-2.4.211-20260407.iso"
+
+# The ansible controller mirror serves the ISO + package/signature updates.
+# so_apt_mirror role sets up nginx here; so_manager/so_search/so_sensor roles
+# point at this base URL for install + updates.
+so_mirror_host: "10.255.240.157"
+so_mirror_port: 80
+so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
+so_iso_url: "{{ so_mirror_url }}/so-iso/{{ so_iso_filename }}"
+
+# --- Network layout (dev range) ---
+so_subnet_security: "172.16.5.0/24"
+so_subnet_operations: "172.16.8.0/24"
+so_subnet_engineering: "172.16.6.0/24"
+so_subnet_services: "172.16.7.0/24"
+
+# Subnets allowed to reach the SOC WebUI + so-allow rules.
+# For dev: security subnet itself (analyst boxes) + mgmt plane (ansible).
+so_allow_subnets:
+  - "{{ so_subnet_security }}"
+  - "10.255.240.0/20"
+
+# --- Manager reachability from search/sensor ---
+so_manager_ip: "172.16.5.10"
+so_manager_hostname: "so-manager"
+
+# --- Common Linux baseline ---
+common_timezone: "UTC"
+common_default_user: "simspace"

@@ -1,0 +1,28 @@
+---
+# host_vars/so-sensor-1.yml — SO 2.4.x Sensor node (Zeek + Suricata + Stenographer)
+# Image:   global/RDP_Ubuntu_Desktop_22.04.5:1.1.0 (16 vCPU / 32 GB)
+# Prod:    security 172.16.5.20/24 → gw 172.16.5.1
+# Mgmt:    10.255.240.102/20 (position FIRST)
+#
+# Note: new platform does not support mirror NICs. Traffic capture is via
+# GRE-encapsulated mirror from router-0 (see vyos_mirror role). Suricata +
+# Zeek bind to the tun0 tunnel interface (or to eth1 with a GRE filter,
+# depending on which pattern works better with SO's own bond0 defaults).
+ansible_host: "10.255.240.102"
+ansible_user: "simspace"
+ansible_python_interpreter: "/usr/bin/python3"
+
+so_role: "sensor"
+so_hostname: "so-sensor-1"
+so_prod_ip: "172.16.5.20"
+so_prod_prefix: 24
+so_prod_gateway: "172.16.5.1"
+so_prod_dns:
+  - "10.255.240.157"
+
+# tun0 endpoint on the sensor side — router-0's tun0 remote points at
+# so_prod_ip; the tunnel address (10.100.0.0/30) is arbitrary internal.
+so_gre_tunnel_local: "10.100.0.2"
+so_gre_tunnel_remote: "10.100.0.1"
+so_gre_tunnel_prefix: 30
+so_monitor_interface: "tun0"

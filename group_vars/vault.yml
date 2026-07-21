@@ -1,0 +1,23 @@
+---
+# =========================================================================
+# group_vars/vault.yml — secrets (VAULT-ENCRYPT BEFORE COMMIT)
+# =========================================================================
+# This file MUST be encrypted with ansible-vault before pushing to git.
+# For dev, ansible-vault password lives at /home/simspace/.vault_pass on
+# the ansible controller (see ansible.cfg).
+#
+# Encrypt: ansible-vault encrypt group_vars/vault.yml
+# Edit:    ansible-vault edit group_vars/vault.yml
+# =========================================================================
+
+# SOC WebUI admin login (rendered into the manager answer file).
+vault_so_web_password: "ChangeMe-DevOnly-Simspace1!"
+
+# SOREMOTEPASS: shared secret used by search/sensor nodes to SSH the manager
+# and register salt-minion keys. Must match across all three answer files
+# in a single deploy. Rotate per range instance.
+vault_so_remote_password: "ChangeMe-DevOnly-Simspace1!"
+
+# SSH password fallback for the SimSpace-baked "simspace" user, in case
+# key-based auth to a freshly-provisioned VM hasn't been established yet.
+vault_simspace_password: "Simspace1!Simspace1!"

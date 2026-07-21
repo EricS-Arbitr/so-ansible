@@ -1,0 +1,17 @@
+---
+# =========================================================================
+# 10-mirror.yml — stage SO ISO on ansible controller for airgap install
+# =========================================================================
+# Runs on ansible box itself (ansible_connection=local). Serves ISO +
+# eventually SO package/signature mirror over nginx :80. All SO nodes
+# fetch the ISO from here during install (see so_manager/so_search/
+# so_sensor roles).
+# =========================================================================
+
+- name: SO local mirror — nginx serving ISO on ansible controller
+  hosts: ansible_controller
+  become: true
+  gather_facts: true
+  roles:
+    - common
+    - so_apt_mirror

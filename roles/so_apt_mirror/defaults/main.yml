@@ -1,0 +1,26 @@
+---
+# so_apt_mirror defaults — overridden by group_vars/all.yml where appropriate.
+
+so_mirror_root: /var/www/so-mirror
+so_mirror_port: 80
+
+# Upstream SO ISO URL (Business Medium equivalent from SO's public downloads).
+# Falls back to letting the operator pre-stage the ISO manually if the
+# controller has no internet; see tasks/main.yml for pre-staged-detection.
+so_iso_url_upstream: "https://download.securityonion.net/file/securityonion/{{ so_iso_filename }}"
+
+# SHA256 of the SO 2.4.211-20260407 ISO. Verify by pulling
+# https://download.securityonion.net/file/securityonion/{{ so_iso_filename }}.sha256
+# on first fetch. Populated at that time by hand into vault/all.yml if we
+# want the get_url task to enforce it strictly.
+so_iso_sha256: ""  # empty = skip checksum (dev-only; set for prod)
+
+# HTTP proxy for the ansible controller's egress (matches airfield-range
+# convention). Uncomment if the controller does have upstream access.
+so_mirror_proxy: "http://10.255.240.1:3128"
+
+# Whether to fetch the ISO from upstream at all, vs. requiring operator to
+# pre-place it at {{ so_mirror_root }}/so-iso/{{ so_iso_filename }}. In
+# fully-airgapped labs, set to false + drop the ISO into the mirror dir
+# via scp before the deploy.
+so_iso_fetch_upstream: true

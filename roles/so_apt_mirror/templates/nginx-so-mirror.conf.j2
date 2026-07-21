@@ -1,0 +1,35 @@
+# so-mirror nginx site — serves SO source tarball + ISO to SO nodes.
+# Rendered by roles/so_apt_mirror/tasks/main.yml.
+
+server {
+    listen {{ so_mirror_port }} default_server;
+    listen [::]:{{ so_mirror_port }} default_server;
+
+    server_name {{ so_mirror_host }} _;
+
+    root {{ so_mirror_root }};
+
+    # Enable directory autoindex so SO nodes can browse the mirror.
+    # Dev-only; if this migrates to a customer range, drop autoindex + add
+    # bs-ops-fw ACL to restrict who can reach :80.
+    autoindex on;
+    autoindex_exact_size off;
+
+    # Large-file streaming — the SO ISO is ~5 GB.
+    sendfile on;
+    tcp_nopush on;
+    aio on;
+    directio 8m;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # Long timeouts for big-file downloads over slower mgmt-plane.
+    client_max_body_size 10G;
+    proxy_read_timeout 3600;
+    send_timeout 3600;
+
+    access_log /var/log/nginx/so-mirror-access.log;
+    error_log  /var/log/nginx/so-mirror-error.log warn;
+}

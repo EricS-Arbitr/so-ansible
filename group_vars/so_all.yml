@@ -1,0 +1,43 @@
+---
+# =========================================================================
+# group_vars/so_all.yml — shared defaults for all SO 2.4.x nodes
+# =========================================================================
+# Variables here parameterize the answer-file templates that so-setup
+# consumes. Source of truth for the schema:
+#   https://github.com/Security-Onion-Solutions/securityonion/tree/master/setup/automation
+# (files distributed-airgap-{manager,search,sensor}). Named for the
+# variables so-setup's bash source references — DO NOT rename without
+# also updating the .j2 templates + re-checking against the SO source
+# for the pinned version.
+# =========================================================================
+
+# --- Install mode ---
+so_interwebs: "AIRGAP"         # AIRGAP or STANDARD; AIRGAP = install from mounted ISO
+so_nids: "Suricata"            # Suricata or Snort
+so_zeek_version: "ZEEK"        # ZEEK (open) or CORELIGHT
+so_rule_set: "ETOPEN"          # ETOPEN (free ET Open) or ETPRO
+so_manager_adv: "BASIC"        # BASIC or ADVANCED (advanced pillar tuning)
+
+# --- Manager-side WebUI (rendered into manager answer file) ---
+# WEBUSER + WEBPASSWD1/2 are the initial SOC admin. Populated from vault.
+so_web_user: "admin@so-ansible.local"
+so_web_password: "{{ vault_so_web_password }}"
+
+# --- SOREMOTEPASS = shared secret used by search/sensor to SSH the manager
+# and register their salt-minion key. Populated from vault. Same value must
+# be baked into all three answer files.
+so_remote_password: "{{ vault_so_remote_password }}"
+
+# --- Node-join reachability (rendered into search/sensor answer files) ---
+# MSRV = manager hostname; MSRVIP = manager production IP.
+so_msrv: "{{ so_manager_hostname }}"
+so_msrv_ip: "{{ so_manager_ip }}"
+
+# --- Address type for MGMT NIC ---
+# STATIC forces so-setup to skip DHCP; MIP/MMASK/MGATEWAY/MDNS are populated
+# from each host's host_vars via the templates.
+so_address_type: "STATIC"
+
+# --- Docker + so-allow ---
+so_docker_range: "172.17.0.0/16"    # default; keep so-setup happy without prompt
+so_web_access_type: "IP"             # IP or HOSTNAME

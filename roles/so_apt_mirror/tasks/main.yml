@@ -1,0 +1,144 @@
+---
+# =========================================================================
+# so_apt_mirror — nginx serves SO ISO + SO source tarball on ansible box.
+# =========================================================================
+
+- name: Install nginx + git (git needed to snapshot SO source)
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - git
+      - ca-certificates
+    state: present
+    update_cache: yes
+
+- name: Mirror root + subdirs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: www-data
+    group: www-data
+  loop:
+    - "{{ so_mirror_root }}"
+    - "{{ so_mirror_root }}/so-source"
+    - "{{ so_mirror_root }}/so-iso"
+
+# --- SO source tarball at pinned SHA -------------------------------------
+
+- name: Check if SO source snapshot already exists
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+  register: so_source_tarball
+
+- name: Clone SO source at pinned SHA (temp dir; only runs if snapshot missing)
+  ansible.builtin.git:
+    repo: "{{ so_git_repo }}"
+    dest: "/tmp/so_source_build"
+    version: "{{ so_git_ref }}"
+    depth: 1
+    force: yes
+  environment:
+    HTTPS_PROXY: "{{ so_mirror_proxy }}"
+    HTTP_PROXY: "{{ so_mirror_proxy }}"
+  when: not so_source_tarball.stat.exists
+
+- name: Tar the SO source snapshot into the mirror
+  ansible.builtin.command: >
+    tar -czf {{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+    -C /tmp/so_source_build .
+  args:
+    creates: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+  when: not so_source_tarball.stat.exists
+
+- name: Fix ownership on SO source tarball
+  ansible.builtin.file:
+    path: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+
+- name: Clean up SO source build tree
+  ansible.builtin.file:
+    path: "/tmp/so_source_build"
+    state: absent
+  when: not so_source_tarball.stat.exists
+
+# --- SO ISO (optional upstream fetch) ------------------------------------
+
+- name: Check if ISO already staged
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-iso/{{ so_iso_filename }}"
+  register: so_iso_present
+
+- name: Warn if ISO fetch disabled and ISO not pre-staged
+  ansible.builtin.fail:
+    msg: |
+      SO ISO not present at {{ so_mirror_root }}/so-iso/{{ so_iso_filename }}
+      and so_iso_fetch_upstream=false. Either set so_iso_fetch_upstream=true
+      or manually place the ISO at that path (scp from a host with internet)
+      before re-running this role.
+  when:
+    - not so_iso_present.stat.exists
+    - not so_iso_fetch_upstream
+
+- name: Fetch SO ISO from upstream (~4-6 GB — takes several minutes on first run)
+  ansible.builtin.get_url:
+    url: "{{ so_iso_url_upstream }}"
+    dest: "{{ so_mirror_root }}/so-iso/{{ so_iso_filename }}"
+    checksum: "{{ 'sha256:' + so_iso_sha256 if so_iso_sha256 else omit }}"
+    mode: '0644'
+    owner: www-data
+    group: www-data
+    timeout: 1800
+  environment:
+    HTTPS_PROXY: "{{ so_mirror_proxy }}"
+    HTTP_PROXY: "{{ so_mirror_proxy }}"
+  when:
+    - not so_iso_present.stat.exists
+    - so_iso_fetch_upstream
+
+# --- nginx config --------------------------------------------------------
+
+- name: nginx site config for so-mirror
+  ansible.builtin.template:
+    src: nginx-so-mirror.conf.j2
+    dest: /etc/nginx/sites-available/so-mirror
+    mode: '0644'
+  notify: reload nginx
+
+- name: Enable so-mirror site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/so-mirror
+    dest: /etc/nginx/sites-enabled/so-mirror
+    state: link
+  notify: reload nginx
+
+- name: Disable nginx default site (would 502 our :80)
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Ensure nginx is running + enabled
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Quick smoke test — SO source tarball reachable via HTTP
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
+    method: HEAD
+    status_code: 200
+  register: mirror_smoke
+  changed_when: false
+  retries: 3
+  delay: 2
+
+- name: Report mirror status
+  ansible.builtin.debug:
+    msg: |
+      so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
+        SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+        SO ISO:    /so-iso/{{ so_iso_filename }} ({{ 'present' if so_iso_present.stat.exists or so_iso_fetch_upstream else 'MISSING — stage manually' }})

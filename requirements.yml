@@ -1,0 +1,27 @@
+---
+# =========================================================================
+# requirements.yml — Ansible collections
+# =========================================================================
+collections:
+  # VyOS: routing + tunnel + tc mirred config on router-0
+  - name: vyos.vyos
+    version: ">=4.0.0"
+
+  # Community-general: assorted modules (docker, various URI helpers)
+  - name: community.general
+    version: ">=8.0.0"
+
+  # ansible.posix: seboolean, sysctl, mount (SO manager mounts the ISO)
+  - name: ansible.posix
+    version: ">=1.5.0"
+
+  # community.docker: SO manager runs Docker for its containers; needed if
+  # we ever have to nudge containers directly (usually SO's own so-* CLIs
+  # handle this, but keep it available).
+  - name: community.docker
+    version: ">=3.4.0"
+
+  # ansible.windows: for Elastic Agent enrollment on DC01 + workstations
+  # (elastic_agent role, when we add Windows targets to scope).
+  - name: ansible.windows
+    version: ">=2.2.0"

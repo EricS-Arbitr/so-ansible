@@ -1,0 +1,140 @@
+---
+name: "ARBITR_SO_DEV"
+description: ""
+resources:
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "ops-wks-01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.2.0"
+    networkInterfaces:
+    - name: "Operations"
+      ipAddress: "172.16.8.5"
+      prefix: 24
+    hostname: "rdp-win-10-0"
+    managementInterface:
+      ipAddress: "10.255.240.120"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Operations"
+  properties:
+    cidr: "172.16.8.0/24"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Engineering"
+  properties:
+    cidr: "172.16.6.0/24"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "security"
+  properties:
+    cidr: "172.16.5.0/24"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "ansible"
+  properties:
+    image: "global/RC_NG_Ansible:2.1.0"
+    networkInterfaces:
+    - name: "control-10"
+      ipAddress: "10.10.10.10"
+      prefix: 16
+    managementInterface:
+      ipAddress: "10.255.240.157"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "router-0"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "Operations"
+      ipAddress: "172.16.8.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Engineering"
+      ipAddress: "172.16.6.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Services"
+      ipAddress: "172.16.7.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "security"
+      ipAddress: "172.16.5.1"
+      prefix: 24
+      role: "GATEWAY"
+    managementInterface:
+      ipAddress: "10.255.240.165"
+      position: "LAST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "DC01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.2.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.16.7.7"
+      prefix: 24
+    hostname: "rdp-win-2022-0"
+    managementInterface:
+      ipAddress: "10.255.240.121"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "eng-wks-01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_10:1.2.0"
+    networkInterfaces:
+    - name: "Engineering"
+      ipAddress: "172.16.6.11"
+      prefix: 24
+    hostname: "rdp-win-10-1"
+    managementInterface:
+      ipAddress: "10.255.240.122"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-manager"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "security"
+      ipAddress: "172.16.5.10"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.100"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-search"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "security"
+      ipAddress: "172.16.5.15"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.101"
+      position: "FIRST"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "Services"
+  properties:
+    cidr: "172.16.7.0/24"
+- type: "range.resource.primitive.Subnet::1.0.0"
+  name: "control-10"
+  properties:
+    cidr: "10.10.0.0/16"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "so-sensor-1"
+  metadata: {}
+  properties:
+    image: "global/RDP_Ubuntu_Desktop_22.04.5:1.1.0"
+    cpuCount: 16
+    memory: "32768"
+    networkInterfaces:
+    - name: "security"
+      ipAddress: "172.16.5.20"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.102"
+      position: "FIRST"

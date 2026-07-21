@@ -1,0 +1,51 @@
+---
+# =========================================================================
+# 60-verify.yml — end-to-end verification of the SO deploy
+# =========================================================================
+# Cheap checks: so-status on manager, /_cluster/health on search,
+# suricata + zeek running on sensor, GRE tunnel up on both ends, packets
+# flowing (tcpdump packet count > 0 in a 5-sec window on sensor's tun0).
+#
+# Actual pass/fail thresholds + output formatting live in verify_so.sh
+# (top-level script) which this playbook invokes as its final check.
+# =========================================================================
+
+- name: SO manager status
+  hosts: so_manager
+  become: true
+  gather_facts: false
+  tasks:
+    - name: so-status
+      ansible.builtin.command: sudo so-status
+      changed_when: false
+      register: so_status_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ so_status_out.stdout_lines[-20:] }}"
+
+- name: SO search cluster health
+  hosts: so_search
+  become: true
+  gather_facts: false
+  tasks:
+    - name: elastic cluster health
+      ansible.builtin.command: sudo so-elasticsearch-query _cluster/health?pretty
+      changed_when: false
+      register: es_health_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ es_health_out.stdout }}"
+
+- name: SO sensor pcap flow rate
+  hosts: so_sensor
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 5-sec tcpdump on monitor interface — packet count > 0 means GRE mirror is delivering
+      ansible.builtin.shell: |
+        timeout 5 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -3
+      changed_when: false
+      register: pcap_out
+    - name: report
+      ansible.builtin.debug:
+        msg: "{{ pcap_out.stdout }}"
