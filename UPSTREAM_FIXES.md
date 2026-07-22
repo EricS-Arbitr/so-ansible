@@ -20,6 +20,77 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-22 · bug · Security Onion master's `setup/so-functions` doesn't accept Ubuntu 22.04 (jammy)
+
+**Symptom.** Phase 40 (so_manager) invokes `so-setup network so-ansible-manager`
+which exits with rc=1 in 0.2 s. Log at `/root/so-setup.log` on so-manager:
+```
+Getting started...
+We do not support your current version of Ubuntu.
+```
+
+**Detection.** `grep 'do not support' /root/manager_setup/securityonion/setup/so-functions`
+shows the reject block:
+```
+elif [ -f /etc/os-release ]; then
+    OS=ubuntu
+    if grep -q "UBUNTU_CODENAME=bionic" /etc/os-release; then
+        OSVER=bionic
+    elif grep -q "UBUNTU_CODENAME=focal" /etc/os-release; then
+        OSVER=focal
+    else
+        echo "We do not support your current version of Ubuntu."
+        exit 1
+    fi
+```
+
+master's `so-functions` (SHA `94c7dabd...` from 2026-07-20) only accepts
+bionic (18.04) + focal (20.04). Our blueprint image is
+`RDP_Ubuntu_Desktop_22.04.5:1.1.0` → jammy → hard reject.
+
+**Root cause.** SO master's `setup/` dir is INCONSISTENT with itself:
+- `setup/automation/distributed-net-ubuntu-{manager,search,sensor}` templates
+  clearly target Ubuntu network install
+- `setup/so-functions`'s OS detection hasn't been updated to accept jammy yet
+
+Cross-referenced with tagged releases: every tag from 2.4.180 through
+2.4.211 DOES accept jammy in `so-functions` (adds `elif
+UBUNTU_CODENAME=jammy → OSVER=jammy; UBVER=22.04`). But those tags LACK
+`setup/automation/` → no answer-file mechanism. Dead end either way.
+
+Downstream complication: `OSVER` is used in salt apt repo URL:
+```
+echo "deb https://repo.securityonion.net/file/securityonion-repo/ubuntu/$ubuntu_version/amd64/salt3004.2/ $OSVER main" > /etc/apt/sources.list.d/saltstack.list
+```
+Setting OSVER=jammy would produce a repo URL for jammy salt packages that
+doesn't exist. Setting OSVER=focal produces the working URL but pulls
+focal-targeted salt 3004.2 packages onto a jammy kernel/glibc.
+
+**Fix (upstream).** SO project should reconcile the setup/automation/ vs
+setup/so-functions inconsistency at master. Either backport the jammy
+detection block into master OR promote the automation mechanism into a
+tagged release.
+
+**Workaround (overlay).** Patched `so-functions` in
+`roles/so_base/files/setup-automation-source/so-functions` to add:
+```
+elif grep -q "UBUNTU_CODENAME=jammy" /etc/os-release; then
+    OSVER=focal
+```
+Fakes jammy AS focal so downstream conditionals + repo URL still match.
+Cost: salt 3004.2 focal-targeted packages may fail glibc/kernel compat
+on jammy. If so, the setup log will show the exact package install
+failure and we can decide next steps (install newer salt manually, or
+petition SimSpace for a focal base image).
+
+**Follow-up.** After a first Phase-40 attempt reveals whether salt
+install survives the version mismatch, either (a) mark this workaround
+stable, or (b) escalate to switching the base image to Ubuntu Server
+20.04 (focal — native SO 2.4 support with no patches) or Rocky (fully
+airgap-capable per the 2026-07-21 finding).
+
+---
+
 ## 2026-07-20 · gap · Security Onion 2.4 — `so-setup` non-interactive mode is undocumented + unsupported
 
 **Symptom.** SO 2.4's `so-setup` installer is entirely interactive (whiptail

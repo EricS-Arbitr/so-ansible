@@ -1161,6 +1161,17 @@ detect_os() {
 			OSVER=bionic
 		elif grep -q "UBUNTU_CODENAME=focal" /etc/os-release; then
 			OSVER=focal
+		elif grep -q "UBUNTU_CODENAME=jammy" /etc/os-release; then
+			# so-ansible patch 2026-07-22: master's so-functions doesn't accept
+			# jammy yet, but master ships setup/automation/distributed-net-ubuntu-*
+			# templates that clearly target it. Tagged 2.4.211-20260407 accepts
+			# jammy natively. We fake jammy AS focal here so downstream
+			# $OSVER == "focal" conditionals + the salt apt repo URL
+			# (repo.securityonion.net/.../salt3004.2/ $OSVER main) continue to
+			# match. Salt 3004.2 focal-targeted packages MAY not install cleanly
+			# on jammy kernel/glibc — if that fails, we know where to look.
+			# Documented in UPSTREAM_FIXES.md · 2026-07-22.
+			OSVER=focal
 		else
 			echo "We do not support your current version of Ubuntu."
 			exit 1
