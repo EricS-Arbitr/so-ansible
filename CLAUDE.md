@@ -72,6 +72,26 @@ network`; init is Windows-only). See UPSTREAM_FIXES.md · 2026-07-21
 narrowest possible sub-task into a purpose-built role rather than
 importing wholesale.
 
+**TECH DEBT — planned adoption of `airfield-range/roles/platform_proxy`**
+(logged 2026-07-22). Sibling repo audit surfaced that
+`airfield-range/roles/platform_proxy` does exactly what I ended up
+duplicating inline in both `so_apt_mirror` and `so_base` (writes
+`/etc/apt/apt.conf.d/95platform-proxy` from `platform_proxy_host` +
+`platform_proxy_port` + docker daemon proxy). Refactor plan: copy
+`platform_proxy` into `so-ansible/roles/`, drop the inline APT-proxy
+tasks from `so_apt_mirror` and `so_base`, run `platform_proxy` as a
+dependency in both roles. Deferred until first fully-green
+phases-10-20-30 deploy so we're not thrashing working state.
+
+**Sibling audit performed 2026-07-22** — no equivalent exists for
+`vyos_mirror` (existing `vyos` role in both siblings is network-config
+only; no GRE/tc handling), `so_base` (SO-specific), `so_manager` /
+`so_search` / `so_sensor` (SO-specific). `range-development-ansible/roles/nginx`
+covers the general nginx install + sites-list pattern but is coupled
+to a `site-rev-proxy` group + `sites: [...]` var; keeping
+`so_apt_mirror`'s inline nginx bits was the smaller effort for our
+single-site case.
+
 **Authored here** (SO-specific):
 - `so_apt_mirror` — nginx :80 serving SO ISO on ansible controller
 - `so_base` — cross-cutting SO node prep (pull ISO from mirror, mount at
