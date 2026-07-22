@@ -123,3 +123,45 @@ Simplest path; abandons decision #4's local mirror plan.
 - CLAUDE.md gained §11 (vault workflow) + §12 (verification).
 
 **Ready for a range deploy dry-run.** No further scaffolding blockers.
+
+---
+
+## 2026-07-22 — Deploy iteration + branch discovery
+
+Ran phases 10 + 20 + 30 through many failure/fix cycles (see git log
+between commits ef127dc and 6e24202). Everything through Phase 30
+went green: mirror serving SO source, router-0 GRE tunnel with tc
+mirror to tun0, all 3 SO nodes prepped with baseline packages + proxy
++ /etc/hosts + snapshotted so-setup overlay + UFW down.
+
+Phase 40 (so_manager) failed in a way that forced a major replan:
+whiptail dialog said "Security Onion Setup - 2.3.300". Investigation
+revealed my `master` snapshot IS 2.3.300 (legacy); real SO 2.4 lives
+on `2.4/main` (currently 2.4.211) or `2.4/dev`. The
+`setup/automation/` answer-file mechanism only exists at 2.3.300 —
+2.4 branches have NO non-interactive install path.
+
+**User chose:** switch to SO 2.4/main + pexpect wrapper driving the
+whiptail TUI. Substantial engineering (~8-12 hours) scheduled for
+next session.
+
+**Block A landed this session (commit TBD):**
+- Re-snapshotted so-setup + so-functions + so-variables + so-whiptail
+  from 2.4/main HEAD (`55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21`) into
+  `roles/so_base/files/setup-automation-source/`.
+- Dropped `distributed-*` templates (master-only, don't apply to 2.4).
+- Updated `so_git_ref` + added `so_git_branch: "2.4/main"` in
+  `group_vars/all/main.yml`.
+- Stubbed `so_manager`, `so_search`, `so_sensor` tasks with `fail:`
+  tasks referencing this log entry.
+- Fixed `so_base` idempotency: SimSpace RDP_Ubuntu_Desktop pre-bakes
+  a legacy 2.3.300 install at `/root/manager_setup/`; my old
+  file-existence check was false-positiving. Replaced with marker
+  file `.so-ansible-pinned-<sha[:12]>` that embeds the pinned SHA,
+  so bumping so_git_ref forces re-extract + wipe of stale source.
+- UPSTREAM_FIXES.md gained the branch-discovery entry.
+
+**Block B (next session):** pexpect wrapper for so_manager (biggest),
+then so_search + so_sensor (smaller, same pattern). Preserve the
+existing group_vars + host_vars answer values — those transfer
+cleanly from bash-var-assignment to Python-dict.

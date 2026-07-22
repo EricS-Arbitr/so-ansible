@@ -20,6 +20,77 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-22 (later) · gap · SO's `master` branch is 2.3.300 (legacy); 2.4 development is on `2.4/main` and has NO answer-file mechanism
+
+**Symptom.** Phase 40 fails partway through so-setup: whiptail dialog
+shows "Security Onion Setup - 2.3.300" (not 2.4). Log at
+/root/so-setup.log shows so-setup gathering management IP + repeated
+`RTNETLINK answers: Network is unreachable` before whiptail fails to
+open a terminal.
+
+**Detection.** Reading the VERSION file at pinned SHA:
+```
+$ curl -fsSL "https://raw.githubusercontent.com/Security-Onion-Solutions/securityonion/master/VERSION"
+2.3.300
+```
+
+Cross-check branches:
+```
+2.3/main    ← legacy 2.3
+2.4/main    ← current 2.4 stable (2.4.211)
+2.4/dev     ← 2.4 development
+master      ← ALSO 2.3.300 (aliased to 2.3/main historically)
+```
+
+The 2-week-old subagent research report referenced "master" and I
+misread it as "current 2.4 development." It was factually correct that
+master has the setup/automation/ answer-file mechanism — but master IS
+2.3.300, not 2.4.
+
+Verification: none of `2.4/main`, `2.4/dev`, or any tagged 2.4.x
+release has `setup/automation/`. The `test_profile` positional arg on
+those branches is limited to internal SO CI hardcoded profiles, not a
+customer-facing mechanism.
+
+**Root cause.** SO project's 2.4 development discarded the automation-
+file mechanism (whether intentionally or not, unclear). Non-interactive
+2.4 install is unsupported.
+
+**Fix (upstream).** SO project should either backport the automation-
+file mechanism into 2.4/main or explicitly document a supported way to
+run so-setup non-interactively. Without either, every deployer of SO 2.4
+at scale writes their own pexpect wrapper.
+
+**Fix (overlay, this project).**
+1. Re-snapshot `so-setup`, `so-functions`, `so-variables`, `so-whiptail`
+   from `2.4/main` HEAD (SHA `55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21`
+   at 2026-07-22) into `roles/so_base/files/setup-automation-source/`.
+2. Drop the `distributed-*` templates from that directory — they only
+   exist on 2.3.300's master and don't apply to 2.4.
+3. Update `so_git_ref` in `group_vars/all/main.yml` to the 2.4/main
+   HEAD SHA + `so_git_branch: "2.4/main"`.
+4. Stub `so_manager`, `so_search`, `so_sensor` roles with `fail:` tasks
+   until a pexpect wrapper implementation lands in a follow-up session.
+5. Fix `so_base` idempotency: the pre-baked SO 2.3.300 install at
+   `/root/manager_setup/securityonion/` on the SimSpace RDP_Ubuntu_Desktop
+   image false-positived our old "does setup/so-setup exist" check.
+   Replaced with a marker file `.so-ansible-pinned-<sha[:12]>` that
+   embeds the pinned SHA, so a bump forces re-extract.
+
+**Follow-up.** Author a pexpect Python script per role that drives
+whiptail prompt-by-prompt with answers rendered from Jinja +
+group_vars + host_vars + vault. Snapshot exact prompt text for schema
+diffing on SO version bumps. Estimated 8-12 hours role rewrite;
+scheduled for the next session.
+
+**Related.** UPSTREAM_FIXES 2026-07-20 (undocumented so-setup non-
+interactive mode), 2026-07-21 (Ubuntu can't do airgap SO 2.4), and
+2026-07-22 (jammy hack of so-functions) are all superseded by this
+finding. The whole "use master's automation mechanism" plan was
+predicated on master being 2.4-in-progress; it isn't.
+
+---
+
 ## 2026-07-22 · bug · Security Onion master's `setup/so-functions` doesn't accept Ubuntu 22.04 (jammy)
 
 **Symptom.** Phase 40 (so_manager) invokes `so-setup network so-ansible-manager`

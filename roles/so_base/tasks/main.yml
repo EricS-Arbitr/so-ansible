@@ -68,10 +68,23 @@
     owner: root
     group: root
 
-- name: Check if SO source already extracted
+# Marker-file idempotency (not "does setup/so-setup exist" — the
+# SimSpace RDP_Ubuntu_Desktop image ships with a legacy SO 2.3.300
+# install pre-baked at /root/manager_setup/securityonion/, and a plain
+# file-existence check false-positives on that. Discovered 2026-07-22.
+# We stamp {{ so_source_dest }}/.so-ansible-pinned-<sha[:12]> after our
+# extract; on redeploy that marker embeds the CURRENT pinned SHA so a
+# bumped so_git_ref no longer matches → re-extract triggers.
+- name: Check if OUR pinned SO source has been extracted (marker file)
   ansible.builtin.stat:
-    path: "{{ so_source_dest }}/setup/so-setup"
-  register: so_source_present
+    path: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
+  register: so_source_current
+
+- name: Wipe pre-baked or stale SO source tree (only if OUR marker missing)
+  ansible.builtin.file:
+    path: "{{ so_source_dest }}"
+    state: absent
+  when: not so_source_current.stat.exists
 
 - name: Fetch SO source tarball from ansible mirror
   ansible.builtin.get_url:
@@ -79,10 +92,8 @@
     dest: "/tmp/securityonion.tar.gz"
     mode: '0644'
     force: yes
-    # Explicit no-proxy for the mirror URL (already set in /etc/environment
-    # but get_url doesn't always honor that; belt-and-suspenders).
     use_proxy: no
-  when: not so_source_present.stat.exists
+  when: not so_source_current.stat.exists
 
 - name: Extract SO source to so_source_dest
   ansible.builtin.unarchive:
@@ -90,7 +101,14 @@
     dest: "/root/manager_setup"
     remote_src: yes
     creates: "{{ so_source_dest }}/setup/so-setup"
-  when: not so_source_present.stat.exists
+  when: not so_source_current.stat.exists
+
+- name: Drop marker file to make future runs idempotent
+  ansible.builtin.copy:
+    dest: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
+    content: "SO source pinned to {{ so_git_branch | default('unknown branch') }}@{{ so_git_ref }}\n"
+    mode: '0644'
+  when: not so_source_current.stat.exists
 
 - name: If tarball extracted at top-level (contents-only tarball), rename to securityonion
   ansible.builtin.stat:
@@ -111,13 +129,13 @@
     executable: /bin/bash
   when:
     - so_setup_at_top.stat.exists
-    - not so_source_present.stat.exists
+    - not so_source_current.stat.exists
 
 - name: Clean up tarball after extract
   ansible.builtin.file:
     path: "/tmp/securityonion.tar.gz"
     state: absent
-  when: not so_source_present.stat.exists
+  when: not so_source_current.stat.exists
 
 # --- Overlay snapshotted so-setup + supporting scripts -------------------
 # Belt-and-suspenders: even if the git tarball's copies drift from what we

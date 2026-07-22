@@ -20,17 +20,21 @@
 # We pin to a specific master commit SHA and snapshot everything into
 # files/setup-automation-source/. On upgrades, refresh SHA + re-snapshot
 # + diff. See files/setup-automation-source/SOURCE_SHA.txt for the pin.
-so_git_ref: "94c7dabd9ed97f134ceadfd00d0410665d898db7"  # master @ 2026-07-20
+# CORRECTION 2026-07-22: SO's `master` branch is 2.3.300 (legacy). Real
+# 2.4 development lives on `2.4/main` (currently 2.4.211) and `2.4/dev`.
+# The setup/automation/ answer-file mechanism only exists at 2.3.300 —
+# 2.4/main and 2.4/dev have NO automation dir → the only non-interactive
+# install path for SO 2.4 is a pexpect wrapper driving the whiptail TUI.
+# See UPSTREAM_FIXES.md · 2026-07-22 entry for the branch discovery.
+so_git_ref: "55af7eb541f086c4e7d6d3182fb2bc4fbc2b9e21"  # 2.4/main HEAD @ 2026-07-22
+so_git_branch: "2.4/main"
 so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
 
-# --- Install mode: NETWORK (not airgap) ---
-# Ubuntu can't do airgap SO 2.4 -- the distributed-airgap-* templates are
-# CentOS-only. Verified 2026-07-21: `so-setup iso` exits with "Only use
-# 'so-setup iso' for an ISO install on CentOS. Please run 'so-setup
-# network' instead." See UPSTREAM_FIXES.md · 2026-07-21 entry.
-# We use `so-setup network <name>` with distributed-net-ubuntu-* templates.
+# --- Install mode: NETWORK ---
+# so-setup network on Ubuntu. Interactive TUI, driven by pexpect from
+# the so_manager/so_search/so_sensor roles (pexpect wrapper is next
+# session's work — current roles are stubs that will fail loudly).
 so_setup_type: "network"
-so_answer_template: "distributed-net-ubuntu"
 
 # --- Corp proxy for SO nodes' upstream package fetches ---
 # SO 2.4 network install pulls from packages.securityonion.net + Docker +
