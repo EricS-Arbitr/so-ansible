@@ -4,11 +4,13 @@ retry/                         # Ansible retry files
 *.iso                          # SO ISOs are 4-6 GB, staged by so_apt_mirror on ansible box
 .DS_Store                      # macOS Finder metadata
 files/setup-automation-source/*.iso   # belt-and-suspenders for the ISO ignore
-# Note on group_vars/vault.yml: currently contains DEV PLACEHOLDER creds
-# ("ChangeMe-DevOnly-Simspace1!"). Encrypt with ansible-vault before any
-# customer-range deploy: `ansible-vault encrypt group_vars/vault.yml`.
-# Do NOT add vault.yml to this ignore — the ENCRYPTED file is meant to
-# be committed.
+
+# --- Ansible vault password file (NEVER commit this) ---
+# The dev vault password lives in this file on both the mac dev machine
+# and the controller (at /home/simspace/.vault_pass). Distribute the
+# password out-of-band; see CLAUDE.md §11.
+.vault_pass
+/home/simspace/.vault_pass
 
 # --- Python (upstream .gitignore inherited) ---
 # Byte-compiled / optimized / DLL files

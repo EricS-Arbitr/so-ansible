@@ -129,7 +129,8 @@ cp -R "$SO_ANSIBLE/playbooks/"* "$STAGE/playbooks/"
 cp    "$SO_ANSIBLE/deploy.sh"  "$STAGE/"
 chmod +x "$STAGE/deploy.sh"
 [ -f "$SO_ANSIBLE/requirements.yml" ] && cp "$SO_ANSIBLE/requirements.yml" "$STAGE/"
-[ -f "$SO_ANSIBLE/verify_so.sh" ]     && { cp "$SO_ANSIBLE/verify_so.sh" "$STAGE/"; chmod +x "$STAGE/verify_so.sh"; }
+[ -f "$SO_ANSIBLE/verify_so.sh" ]     && { cp "$SO_ANSIBLE/verify_so.sh"  "$STAGE/"; chmod +x "$STAGE/verify_so.sh"; }
+[ -f "$SO_ANSIBLE/vault-tools.sh" ]   && { cp "$SO_ANSIBLE/vault-tools.sh" "$STAGE/"; chmod +x "$STAGE/vault-tools.sh"; }
 
 if [ -d "$SO_ANSIBLE/files" ]; then
   cp -R "$SO_ANSIBLE/files" "$STAGE/"
@@ -141,8 +142,9 @@ fi
 cd "$STAGE"
 TAR_PATHS=(roles host_vars group_vars hosts site.yml playbooks deploy.sh)
 [ -f "requirements.yml" ] && TAR_PATHS+=(requirements.yml)
-[ -f "verify_so.sh" ] && TAR_PATHS+=(verify_so.sh)
-[ -d "files" ] && TAR_PATHS+=(files)
+[ -f "verify_so.sh" ]     && TAR_PATHS+=(verify_so.sh)
+[ -f "vault-tools.sh" ]   && TAR_PATHS+=(vault-tools.sh)
+[ -d "files" ]            && TAR_PATHS+=(files)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""

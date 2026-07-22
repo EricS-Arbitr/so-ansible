@@ -147,10 +147,59 @@ so-ansible/
 - **Never bypass so-setup by editing SO's own files** unless there's no
   alternative. If we do, document it in UPSTREAM_FIXES + open an issue
   in the SO repo.
-- **Preserve `distributed-airgap-*` answer-file variable names verbatim.**
-  So-setup is bash-sourcing — a typo silently skips the value and the
+- **Preserve `distributed-net-ubuntu-*` answer-file variable names verbatim.**
+  so-setup is bash-sourcing — a typo silently skips the value and the
   TUI reappears. Compare rendered answer files against
   `so-ansible/files/setup-automation-source/` snapshots on each SO upgrade.
+
+## 11. Vault + secrets workflow
+
+`group_vars/vault.yml` is ansible-vault encrypted. Password file location
+(matches `ansible.cfg`'s `vault_password_file` setting):
+- **Controller:** `/home/simspace/.vault_pass` (mode 600, contents = password)
+- **Local dev (Mac):** `./.vault_pass` in the repo root (gitignored)
+
+**Password distribution.** The dev vault password is distributed out-of-band
+(Slack DM / 1Password / similar). NOT committed anywhere in this repo.
+Rotate the password before any customer-range deploy.
+
+**Common operations** (via `vault-tools.sh`):
+```bash
+./vault-tools.sh check      # is vault.yml encrypted?
+./vault-tools.sh view       # print decrypted contents
+./vault-tools.sh edit       # decrypt → $EDITOR → re-encrypt (atomic)
+./vault-tools.sh rekey      # rotate the password
+./vault-tools.sh encrypt    # first-time encrypt (for a plaintext vault.yml)
+./vault-tools.sh decrypt    # dev-only escape hatch; DO NOT commit
+```
+
+**Deploy-time guard.** `deploy.sh` refuses to run if `vault.yml` doesn't
+start with `$ANSIBLE_VAULT;1.1;AES256`. Prevents a checkout-and-forget
+mistake from shipping plaintext creds.
+
+**Current placeholders** (rotate for real deploys):
+- `vault_so_web_password` — SOC WebUI admin login
+- `vault_so_remote_password` — SOREMOTEPASS for search/sensor to join manager
+- `vault_simspace_password` — SSH fallback for the simspace user on fresh VMs
+
+## 12. Verification
+
+`verify_so.sh` is the deploy-side sanity check. Six sections:
+
+1. Inventory reachability (mgmt-plane ping across every host)
+2. Ansible controller (nginx :80 + SO source tarball reachable)
+3. router-0 (GRE tunnel + tc mirror rules per source interface)
+4. so-manager (so-status + Elastic cluster health + SOC WebUI + salt-key)
+5. so-search (so-status + is a data node in Elastic cluster)
+6. so-sensor-1 (so-status + Suricata + Zeek + tun0 promiscuous + tcpdump smoke)
+
+```bash
+cd /etc/ansible && ./verify_so.sh          # summary
+cd /etc/ansible && ./verify_so.sh -v       # verbose on fails
+```
+The tcpdump-on-tun0 check at the end is the money-shot — packets there
+means the whole chain (GRE mirror → kernel decap → Suricata/Zeek input)
+is intact.
 
 ## 9. Deploy sequence
 

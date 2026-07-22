@@ -21,6 +21,17 @@ export ANSIBLE_CACHE_PLUGIN_CONNECTION="$HOME/.ansible/fact_cache"
 export ANSIBLE_CACHE_PLUGIN_TIMEOUT=86400
 mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 
+# --- Vault encryption guard ------------------------------------------------
+# Refuse to deploy if group_vars/vault.yml is plaintext (either the operator
+# forgot to encrypt after editing, or checked out a fresh clone that hasn't
+# been through vault-tools.sh encrypt). The encrypted file starts with
+# `$ANSIBLE_VAULT;1.1;AES256`.
+if [ -f group_vars/vault.yml ] && ! head -1 group_vars/vault.yml | grep -q '^\$ANSIBLE_VAULT'; then
+	echo "ERROR: group_vars/vault.yml is plaintext. Refusing to deploy."
+	echo "       Encrypt first: ./vault-tools.sh encrypt"
+	exit 1
+fi
+
 if [ -f requirements.yml ]; then
 	echo "=== Installing/refreshing Ansible Galaxy collections ==="
 	HTTPS_PROXY="http://10.255.240.1:3128" \

@@ -102,3 +102,24 @@ Simplest path; abandons decision #4's local mirror plan.
 - git commit + push
 - ansible-vault encrypt group_vars/vault.yml
 - range deploy dry-run
+
+---
+
+## 2026-07-21 (later) — verify_so.sh + vault encryption
+
+- **verify_so.sh** authored (mirrors airfield-range's verify_fuel_farm.sh
+  pattern). Six sections: reachability, mirror, router GRE + tc, manager
+  (so-status + Elastic cluster health + SOC WebUI + salt-key accepted),
+  search (data node in Elastic), sensor (tun0 UP + promisc + Suricata +
+  Zeek + tcpdump-on-tun0 smoke test).
+- **Vault workflow** set up: encrypted `group_vars/vault.yml` with
+  ansible-vault (dev password: `so-ansible-dev`; distributed out-of-band
+  for real deploys). `.vault_pass` at repo root (gitignored) or
+  `/home/simspace/.vault_pass` on the controller. Helper script
+  `vault-tools.sh` wraps common ops (edit/view/encrypt/decrypt/rekey/check).
+- **Deploy-time guard**: `deploy.sh` refuses to run if `vault.yml` isn't
+  encrypted (starts with `$ANSIBLE_VAULT;1.1;AES256`). Prevents a
+  fresh-clone-and-forget mistake from shipping plaintext creds.
+- CLAUDE.md gained §11 (vault workflow) + §12 (verification).
+
+**Ready for a range deploy dry-run.** No further scaffolding blockers.
