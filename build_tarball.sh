@@ -29,6 +29,8 @@ trap 'rm -rf "$STAGE_PARENT"' EXIT
 # --- Helpers ---------------------------------------------------------------
 
 extract_playbook_roles() {
+  # Matches both classic `roles:` block entries AND
+  # `import_role: name: <foo>` / `include_role: name: <foo>` forms.
   awk '
     /^  roles:/ { inroles=1; next }
     inroles && /^  [a-z]/ { inroles=0 }
@@ -38,6 +40,14 @@ extract_playbook_roles() {
       sub(/[ \t#].*$/, "")
       if (length($0) > 0) print
     }
+    # ansible.builtin.import_role / include_role:  name: <role>
+    /^[[:space:]]*name:[[:space:]]/ && prev_line ~ /(import_role|include_role)/ {
+      role=$0
+      sub(/^[[:space:]]*name:[[:space:]]+/, "", role)
+      sub(/[ \t#].*$/, "", role)
+      if (length(role) > 0) print role
+    }
+    { prev_line = $0 }
   ' "$1"
 }
 
