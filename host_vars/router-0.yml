@@ -10,7 +10,14 @@
 ansible_host: "10.255.240.165"
 ansible_user: "vyos"
 ansible_password: "{{ vault_vyos_password }}"
-ansible_connection: "network_cli"
+# ansible_connection is set at PLAY level (not here) because vyos_mirror
+# uses two plays with different connection profiles: network_cli for the
+# tunnel (Part A), plain ssh for the tc script deploy (Part B). If we
+# force ansible_connection: network_cli here in host_vars, it silently
+# overrides the play's `connection: ssh` in Part B (host_vars > play
+# vars for magic vars like this), and Ansible falls back to running
+# non-network_cli modules on the controller (localhost) — which is
+# what caused "hostname: Ansible" in the tc-mirror script log 2026-07-22.
 ansible_network_os: "vyos.vyos.vyos"
 # Auth notes: SimSpace RC-VyOS-Router:1.1.0 uses `vyos / Simspace1!` (shorter
 # form than the Linux lab password Simspace1!Simspace1!). Password from
