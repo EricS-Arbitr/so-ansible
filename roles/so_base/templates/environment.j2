@@ -1,0 +1,14 @@
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+
+# HTTP proxy for SO 2.4 network install — added by so_base role.
+# so-setup calls out to packages.securityonion.net + Docker + Elastic apt
+# repos; those calls need to reach the outside via the mgmt-plane proxy
+# at {{ so_upstream_proxy }}. NO_PROXY includes the SO subnet + mgmt plane
+# so intra-range HTTP (e.g. pulling the source tarball from the ansible
+# mirror) doesn't get proxied.
+http_proxy="{{ so_upstream_proxy }}"
+https_proxy="{{ so_upstream_proxy }}"
+HTTP_PROXY="{{ so_upstream_proxy }}"
+HTTPS_PROXY="{{ so_upstream_proxy }}"
+no_proxy="localhost,127.0.0.0/8,10.255.240.0/20,{{ so_subnet_security }},{{ so_subnet_operations }},{{ so_subnet_engineering }},{{ so_subnet_services }}"
+NO_PROXY="localhost,127.0.0.0/8,10.255.240.0/20,{{ so_subnet_security }},{{ so_subnet_operations }},{{ so_subnet_engineering }},{{ so_subnet_services }}"

@@ -1,0 +1,20 @@
+---
+# so_manager defaults
+
+# Answer file name inside setup/automation/. Prefixed with `so-ansible-`
+# so it doesn't collide with SO's shipped templates.
+so_manager_answer_name: "so-ansible-manager"
+
+# How long we're willing to wait for `so-setup network` to complete before
+# giving up (seconds). Manager install with airgap package pulls is 20-30
+# min; add slack for slow proxies.
+so_manager_install_timeout: 2700   # 45 min
+
+# Poll cadence while so-setup runs (seconds).
+so_manager_poll_interval: 30
+
+# Log destination on the manager host.
+so_manager_setup_log: "/root/so-setup.log"
+
+# Marker path we check for idempotency (present after successful install).
+so_manager_installed_marker: "/opt/so/state/installed"

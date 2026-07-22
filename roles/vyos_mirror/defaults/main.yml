@@ -1,0 +1,12 @@
+---
+# vyos_mirror defaults
+
+# Path where we install the tc-mirror boot script. VyOS runs this on every
+# boot after config load (canonical hook).
+vyos_mirror_script_path: "/config/scripts/vyatta-postconfig-bootup.script"
+
+# Where the current tc mirror config gets fingerprinted so re-runs are cheap.
+vyos_mirror_marker: "/config/scripts/.so-mirror-fingerprint"
+
+# Tunnel interface name (must not collide with existing tun0 use on router).
+vyos_gre_tunnel_iface: "tun0"

@@ -1,6 +1,11 @@
 ---
 # =========================================================================
-# so_apt_mirror — nginx serves SO ISO + SO source tarball on ansible box.
+# so_apt_mirror — nginx on ansible box serves SO source tarball to SO nodes.
+# =========================================================================
+# Scope reduced 2026-07-21: no ISO. Ubuntu SO 2.4 uses `so-setup network`
+# (not iso airgap; that's CentOS-only), so we don't need to serve an ISO
+# at all. SO nodes pull the source tarball from us during so_base, and
+# packages come from upstream via corp proxy during so-setup.
 # =========================================================================
 
 - name: Install nginx + git (git needed to snapshot SO source)
@@ -22,7 +27,6 @@
   loop:
     - "{{ so_mirror_root }}"
     - "{{ so_mirror_root }}/so-source"
-    - "{{ so_mirror_root }}/so-iso"
 
 # --- SO source tarball at pinned SHA -------------------------------------
 
@@ -43,9 +47,10 @@
     HTTP_PROXY: "{{ so_mirror_proxy }}"
   when: not so_source_tarball.stat.exists
 
-- name: Tar the SO source snapshot into the mirror
+- name: Tar the SO source snapshot into the mirror (excluding .git for size)
   ansible.builtin.command: >
-    tar -czf {{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+    tar --exclude='.git' --exclude='.github'
+    -czf {{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
     -C /tmp/so_source_build .
   args:
     creates: "{{ so_mirror_root }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
@@ -63,40 +68,6 @@
     path: "/tmp/so_source_build"
     state: absent
   when: not so_source_tarball.stat.exists
-
-# --- SO ISO (optional upstream fetch) ------------------------------------
-
-- name: Check if ISO already staged
-  ansible.builtin.stat:
-    path: "{{ so_mirror_root }}/so-iso/{{ so_iso_filename }}"
-  register: so_iso_present
-
-- name: Warn if ISO fetch disabled and ISO not pre-staged
-  ansible.builtin.fail:
-    msg: |
-      SO ISO not present at {{ so_mirror_root }}/so-iso/{{ so_iso_filename }}
-      and so_iso_fetch_upstream=false. Either set so_iso_fetch_upstream=true
-      or manually place the ISO at that path (scp from a host with internet)
-      before re-running this role.
-  when:
-    - not so_iso_present.stat.exists
-    - not so_iso_fetch_upstream
-
-- name: Fetch SO ISO from upstream (~4-6 GB — takes several minutes on first run)
-  ansible.builtin.get_url:
-    url: "{{ so_iso_url_upstream }}"
-    dest: "{{ so_mirror_root }}/so-iso/{{ so_iso_filename }}"
-    checksum: "{{ 'sha256:' + so_iso_sha256 if so_iso_sha256 else omit }}"
-    mode: '0644'
-    owner: www-data
-    group: www-data
-    timeout: 1800
-  environment:
-    HTTPS_PROXY: "{{ so_mirror_proxy }}"
-    HTTP_PROXY: "{{ so_mirror_proxy }}"
-  when:
-    - not so_iso_present.stat.exists
-    - so_iso_fetch_upstream
 
 # --- nginx config --------------------------------------------------------
 
@@ -126,7 +97,7 @@
     state: started
     enabled: yes
 
-- name: Quick smoke test — SO source tarball reachable via HTTP
+- name: Smoke test — SO source tarball reachable via HTTP
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
     method: HEAD
@@ -141,4 +112,3 @@
     msg: |
       so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
         SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
-        SO ISO:    /so-iso/{{ so_iso_filename }} ({{ 'present' if so_iso_present.stat.exists or so_iso_fetch_upstream else 'MISSING — stage manually' }})

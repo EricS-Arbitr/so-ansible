@@ -1,0 +1,163 @@
+---
+# =========================================================================
+# so_sensor — GRE tunnel + SENSOR install joining manager
+# =========================================================================
+
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_sensor_installed_marker }}"
+  register: so_installed
+
+- name: End play early if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: "SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs."
+  when: not so_setup_present.stat.exists
+
+# --- Bring up GRE tunnel BEFORE so-setup validates BNICS=tun0 -----------
+
+- name: Deploy netplan drop-in for GRE tunnel {{ so_monitor_interface }}
+  ansible.builtin.template:
+    src: 60-so-mirror-tun.yaml.j2
+    dest: "{{ so_sensor_netplan_tun }}"
+    mode: '0600'
+    owner: root
+    group: root
+  register: netplan_tun
+
+- name: netplan apply (brings tun0 up)
+  ansible.builtin.command: netplan apply
+  when: netplan_tun.changed
+
+- name: Wait for {{ so_monitor_interface }} to appear
+  ansible.builtin.wait_for:
+    path: "/sys/class/net/{{ so_monitor_interface }}"
+    timeout: 15
+
+- name: Force promiscuous on {{ so_monitor_interface }} (needed for sniffing)
+  ansible.builtin.command: "ip link set dev {{ so_monitor_interface }} promisc on"
+  changed_when: false
+
+- name: Verify tunnel is up
+  ansible.builtin.command: "ip -brief link show {{ so_monitor_interface }}"
+  register: tun_state
+  changed_when: false
+  failed_when: "'UP' not in tun_state.stdout"
+
+- name: Report tunnel state
+  ansible.builtin.debug:
+    msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"
+
+# --- Compute prod NIC + netmask -----------------------------------------
+
+- name: Gather network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {16:'255.255.0.0', 20:'255.255.240.0', 22:'255.255.252.0',
+          23:'255.255.254.0', 24:'255.255.255.0', 25:'255.255.255.128',
+          26:'255.255.255.192', 27:'255.255.255.224', 28:'255.255.255.240',
+          29:'255.255.255.248', 30:'255.255.255.252',
+          31:'255.255.255.254', 32:'255.255.255.255'
+      }[so_prod_prefix | int] }}
+
+# --- Render + drop answer file ------------------------------------------
+
+- name: Render sensor answer file
+  ansible.builtin.template:
+    src: sensor.conf.j2
+    dest: "{{ so_source_dest }}/setup/automation/{{ so_sensor_answer_name }}"
+    mode: '0755'
+    owner: root
+    group: root
+
+# --- Run so-setup + wait ------------------------------------------------
+
+- name: Kick off so-setup network (backgrounded)
+  ansible.builtin.shell: |
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} {{ so_sensor_answer_name }} > {{ so_sensor_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+    creates: "{{ so_sensor_installed_marker }}"
+  async: "{{ so_sensor_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+
+- name: Poll so-setup completion
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_sensor_install_timeout / so_sensor_poll_interval) | int }}"
+  delay: "{{ so_sensor_poll_interval }}"
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
+  when: so_setup_result.rc | default(1) != 0
+
+# --- Post-install reboot + verify --------------------------------------
+
+- name: Reboot the sensor
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+
+- name: Verify sensor has joined + services up
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  retries: 8
+  delay: 15
+  until: so_status.rc == 0
+
+- name: Report sensor status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# --- Traffic-flow smoke test -------------------------------------------
+
+- name: 5-sec tcpdump on {{ so_monitor_interface }} — packet count > 0 means GRE mirror delivering
+  ansible.builtin.shell: |
+    timeout 5 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -3
+  changed_when: false
+  register: pcap_smoke
+
+- name: Report pcap flow
+  ansible.builtin.debug:
+    msg: "{{ pcap_smoke.stdout_lines }}"

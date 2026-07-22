@@ -23,20 +23,29 @@
 so_git_ref: "94c7dabd9ed97f134ceadfd00d0410665d898db7"  # master @ 2026-07-20
 so_git_repo: "https://github.com/Security-Onion-Solutions/securityonion.git"
 
-# ISO version — we pair master's setup mechanism with the LATEST tagged
-# SO release ISO. The customer's legacy platform used 2.4.141 per the
-# walkthrough doc, but we have no reason to constrain ourselves there
-# since we install from base Ubuntu.
-so_iso_version: "2.4.211-20260407"
-so_iso_filename: "securityonion-2.4.211-20260407.iso"
+# --- Install mode: NETWORK (not airgap) ---
+# Ubuntu can't do airgap SO 2.4 -- the distributed-airgap-* templates are
+# CentOS-only. Verified 2026-07-21: `so-setup iso` exits with "Only use
+# 'so-setup iso' for an ISO install on CentOS. Please run 'so-setup
+# network' instead." See UPSTREAM_FIXES.md · 2026-07-21 entry.
+# We use `so-setup network <name>` with distributed-net-ubuntu-* templates.
+so_setup_type: "network"
+so_answer_template: "distributed-net-ubuntu"
 
-# The ansible controller mirror serves the ISO + package/signature updates.
-# so_apt_mirror role sets up nginx here; so_manager/so_search/so_sensor roles
-# point at this base URL for install + updates.
+# --- Corp proxy for SO nodes' upstream package fetches ---
+# SO 2.4 network install pulls from packages.securityonion.net + Docker +
+# Elastic + Ubuntu jammy security repos. All egress via mgmt-plane proxy
+# on 10.255.240.1:3128 (matches airfield-range/PowerPlant convention).
+so_upstream_proxy: "http://10.255.240.1:3128"
+
+# --- Ansible-hosted mirror ---
+# Scope: serves SO source tarball at pinned SHA. so_base pulls it from
+# here rather than hitting github.com through the proxy. ISO serving
+# dropped (see so_setup_type note above).
 so_mirror_host: "10.255.240.157"
 so_mirror_port: 80
 so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
-so_iso_url: "{{ so_mirror_url }}/so-iso/{{ so_iso_filename }}"
+so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
 
 # --- Network layout (dev range) ---
 so_subnet_security: "172.16.5.0/24"

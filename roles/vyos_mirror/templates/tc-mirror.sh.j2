@@ -1,0 +1,36 @@
+#!/bin/vbash
+# ============================================================
+# so-mirror tc rules — mirror source interfaces into GRE tun0.
+# Managed by so-ansible/roles/vyos_mirror. Do not hand-edit.
+# ============================================================
+# VyOS declarative CLI doesn't support "mirror ethX -> tunN" so we drop
+# to raw tc. Invoked from vyatta-postconfig-bootup.script; safe to run
+# repeatedly (tc filter add + del before add via check).
+#
+# Sources fingerprint: {{ (vyos_mirror_source_interfaces + [vyos_gre_tunnel_iface]) | join(',') }}
+
+set +e   # tc "already exists" errors are non-fatal on re-run
+
+TUN="{{ vyos_gre_tunnel_iface }}"
+
+# Ensure the tunnel interface is UP before adding tc rules against it.
+if ! ip link show "$TUN" >/dev/null 2>&1; then
+  echo "[so-mirror] $TUN not present yet; skipping tc setup."
+  exit 0
+fi
+ip link set "$TUN" up
+
+{% for iface in vyos_mirror_source_interfaces %}
+# --- {{ iface }} ---
+# Ingress mirror (packets arriving on {{ iface }} -> mirrored to $TUN)
+tc qdisc del dev {{ iface }} ingress 2>/dev/null
+tc qdisc add dev {{ iface }} handle ffff: ingress
+tc filter add dev {{ iface }} parent ffff: matchall action mirred egress mirror dev $TUN
+
+# Egress mirror (packets leaving {{ iface }} -> mirrored to $TUN)
+tc qdisc del dev {{ iface }} root 2>/dev/null
+tc qdisc add dev {{ iface }} handle 1: root prio
+tc filter add dev {{ iface }} parent 1: matchall action mirred egress mirror dev $TUN
+
+{% endfor %}
+echo "[so-mirror] tc rules applied for {{ vyos_mirror_source_interfaces | length }} interfaces -> $TUN"

@@ -58,3 +58,47 @@ Key wins:
 **Next session:** finalize role authoring in dependency order (`so_apt_mirror`
 → `vyos_mirror` → `so_base` → `so_manager` → `so_search`/`so_sensor`), then
 verify_so.sh, then a range deploy dry-run.
+
+---
+
+## 2026-07-21 — All roles authored
+
+Continued Phase 2: authored `so_base`, `vyos_mirror`, `so_manager`,
+`so_search`, `so_sensor`. Build discovery clean (9 roles bundled).
+
+**Plan-invalidating discovery:** SO 2.4 airgap-from-ISO is **CentOS-only**.
+`so-setup iso` at line 87 exits immediately on non-CentOS. No
+`distributed-airgap-ubuntu-*` template exists. Ubuntu targets must use
+`so-setup network` + `distributed-net-ubuntu-*` templates + online repos.
+
+**User decision:** pivot to network install via corp proxy (10.255.240.1:3128).
+Simplest path; abandons decision #4's local mirror plan.
+
+**Changes made:**
+- Snapshotted `distributed-net-ubuntu-{manager,search,sensor}` at same pinned SHA
+- `group_vars/all.yml`: dropped `so_iso_*`, added `so_setup_type: network`,
+  `so_upstream_proxy`, `so_answer_template: distributed-net-ubuntu`
+- `so_apt_mirror` scope reduced to serving SO source tarball only
+- `so_base` sets system-wide proxy env + APT proxy so `so-setup network`
+  reaches upstream via corp proxy
+- All three SO node roles (`so_manager`, `so_search`, `so_sensor`) use
+  `distributed-net-ubuntu-*` as their answer-file source template
+- `so_sensor` brings up sensor-side GRE tunnel `tun0` (matches
+  vyos_mirror's remote endpoint) via netplan `tunnels:` before so-setup
+  runs (BNICS=tun0 needs the interface to exist during install)
+- `vyos_mirror` authored: declarative GRE tunnel via `vyos.vyos.vyos_config`
+  + imperative tc mirred script installed at VyOS postconfig hook
+
+**Small technical fixes during authoring:**
+- MNIC + MMASK now computed at deploy time from `ansible_facts` (was
+  hardcoded ens192 + would have been wrong — mgmt is FIRST=ens192, prod
+  NIC is ens224 on SimSpace VMware image)
+- Answer file `SKIP_REBOOT=1` so Ansible controls the reboot cadence
+- so-setup runs `async` + `poll: 0` (~30 min manager install would
+  otherwise time out an SSH session)
+
+**Not yet done:**
+- verify_so.sh (still stubs in 60-verify.yml playbook)
+- git commit + push
+- ansible-vault encrypt group_vars/vault.yml
+- range deploy dry-run

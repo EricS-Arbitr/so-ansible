@@ -1,0 +1,17 @@
+---
+# so_base defaults — most values come from group_vars/all.yml + host_vars.
+
+# Where the SO source tarball is extracted on each SO node.
+# so-setup at master lines 138-139 auto-detects this path:
+#   if -d /root/manager_setup/securityonion && pwd != /root/manager_setup/securityonion/setup
+#     exec bash /root/manager_setup/securityonion/setup/so-setup ...
+so_source_dest: "/root/manager_setup/securityonion"
+
+# Where the snapshotted so-setup + supporting scripts are shipped from
+# (relative to the ansible controller's files/ dir, per Ansible's
+# role-relative file lookup).
+so_snapshot_files:
+  - so-setup
+  - so-functions
+  - so-variables
+  - so-whiptail

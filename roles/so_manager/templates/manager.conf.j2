@@ -1,0 +1,76 @@
+#!/bin/bash
+# =========================================================================
+# SO 2.4 Manager answer file — rendered by so-ansible/roles/so_manager.
+# Source template: securityonion@{{ so_git_ref[:12] }}/setup/automation/
+#                  distributed-net-ubuntu-manager (snapshot at files/setup-automation-source/).
+# so-setup at master lines ~140+ bash-sources this file and reads every
+# variable that gates a whiptail prompt. Any UNRECOGNIZED variable name
+# is silently ignored -- if we misspell one, the TUI reappears for that
+# prompt at install time. DO NOT rename variables without diffing against
+# the snapshot at files/setup-automation-source/distributed-net-ubuntu-manager.
+# =========================================================================
+
+TESTING=true
+
+# --- Networking (STATIC per group_vars) ---
+# so_prod_nic + so_prod_netmask computed at task time from ansible_facts
+# (see roles/so_manager/tasks/main.yml). Hardcoding either was fragile:
+# platform NIC names (ens192 vs ens224) depend on PCI slot ordering and
+# netmask can be derived from CIDR prefix. Compute > hardcode.
+address_type={{ so_address_type }}
+MIP={{ so_prod_ip }}
+MMASK={{ so_prod_netmask }}
+MGATEWAY={{ so_prod_gateway }}
+MDNS={{ so_prod_dns | join(',') }}
+MNIC={{ so_prod_nic }}
+
+# --- Install shape ---
+install_type=MANAGER
+HOSTNAME={{ so_hostname }}
+NIDS={{ so_nids }}
+ZEEKVERSION={{ so_zeek_version }}
+RULESETUP={{ so_rule_set }}
+MANAGERADV={{ so_manager_adv }}
+NODESETUP=NODEBASIC
+NSMSETUP=BASIC
+NODEUPDATES=MANAGER
+
+# Sensible defaults for detection-tuning knobs (match shipped template).
+BASICZEEK=7
+BASICSURI=7
+HNMANAGER=10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
+HNSENSOR=inherit
+
+# --- Admin creds ---
+ADMINUSER=onionuser
+ADMINPASS1={{ vault_so_remote_password }}
+ADMINPASS2={{ vault_so_remote_password }}
+
+# --- WebUI (SOC) ---
+WEBUSER={{ so_web_user }}
+WEBPASSWD1={{ vault_so_web_password }}
+WEBPASSWD2={{ vault_so_web_password }}
+REDIRECTINFO={{ so_web_access_type }}
+
+# --- so-allow (who can reach the SOC WebUI) ---
+ALLOW_CIDR={{ so_allow_subnets | join(',') }}
+ALLOW_ROLE=a
+
+# --- Shared secret for search/sensor to join us ---
+SOREMOTEPASS1={{ vault_so_remote_password }}
+SOREMOTEPASS2={{ vault_so_remote_password }}
+
+# --- Feature toggles (match shipped template defaults) ---
+GRAFANA=1
+OSQUERY=1
+PLAYBOOK=1
+STRELKA=1
+THEHIVE=0
+WAZUH=1
+
+# --- Patch schedule (auto = SO decides) ---
+PATCHSCHEDULENAME=auto
+
+# --- Suppress SO's own post-install reboot ---
+# We reboot from Ansible so we can wait_for_connection reliably.
+SKIP_REBOOT=1

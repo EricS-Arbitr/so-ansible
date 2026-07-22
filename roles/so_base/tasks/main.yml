@@ -1,0 +1,137 @@
+---
+# =========================================================================
+# so_base — shared prep for every SO Linux node before so-setup runs
+# =========================================================================
+
+- name: Baseline packages needed for SO 2.4 network install on Ubuntu 22.04
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - python3-apt      # ansible.builtin.apt requires it on target
+      - wget             # so-setup's own downloads fall back to wget
+      - net-tools        # so-setup uses `netstat` for NIC detection
+      - jq               # useful for later grid-status parsing
+    state: present
+    update_cache: yes
+
+# --- Proxy env for so-setup's upstream package fetches -------------------
+
+- name: System-wide proxy env vars (so /etc/environment picks up on login)
+  ansible.builtin.template:
+    src: environment.j2
+    dest: /etc/environment
+    mode: '0644'
+    backup: yes
+
+- name: APT proxy (so `apt-get update` from so-setup honors the corp proxy)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95so-proxy
+    mode: '0644'
+    content: |
+      # Added by so_base role
+      Acquire::http::Proxy "{{ so_upstream_proxy }}";
+      Acquire::https::Proxy "{{ so_upstream_proxy }}";
+      # Bypass proxy for our local mirror (fetching SO source tarball).
+      Acquire::http::Proxy::{{ so_mirror_host }} "DIRECT";
+
+# --- /etc/hosts entries for peer SO nodes --------------------------------
+
+- name: /etc/hosts with peer SO nodes (needed for MSRV short-hostname resolution)
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    mode: '0644'
+    backup: yes
+
+# --- SO source tarball fetch from ansible mirror -------------------------
+
+- name: Ensure so_source_dest parent exists
+  ansible.builtin.file:
+    path: "/root/manager_setup"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Check if SO source already extracted
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_source_present
+
+- name: Fetch SO source tarball from ansible mirror
+  ansible.builtin.get_url:
+    url: "{{ so_source_tarball_url }}"
+    dest: "/tmp/securityonion.tar.gz"
+    mode: '0644'
+    force: yes
+    # Explicit no-proxy for the mirror URL (already set in /etc/environment
+    # but get_url doesn't always honor that; belt-and-suspenders).
+    use_proxy: no
+  when: not so_source_present.stat.exists
+
+- name: Extract SO source to so_source_dest
+  ansible.builtin.unarchive:
+    src: "/tmp/securityonion.tar.gz"
+    dest: "/root/manager_setup"
+    remote_src: yes
+    creates: "{{ so_source_dest }}/setup/so-setup"
+  when: not so_source_present.stat.exists
+
+- name: If tarball extracted at top-level (contents-only tarball), rename to securityonion
+  ansible.builtin.stat:
+    path: "/root/manager_setup/setup/so-setup"
+  register: so_setup_at_top
+
+- name: Move top-level extract into securityonion/ subdir if needed
+  ansible.builtin.shell: |
+    set -e
+    cd /root/manager_setup
+    mkdir -p securityonion
+    # Move everything except the securityonion/ dir itself into it
+    for item in *; do
+      [ "$item" = "securityonion" ] && continue
+      mv "$item" securityonion/
+    done
+  args:
+    executable: /bin/bash
+  when:
+    - so_setup_at_top.stat.exists
+    - not so_source_present.stat.exists
+
+- name: Clean up tarball after extract
+  ansible.builtin.file:
+    path: "/tmp/securityonion.tar.gz"
+    state: absent
+  when: not so_source_present.stat.exists
+
+# --- Overlay snapshotted so-setup + supporting scripts -------------------
+# Belt-and-suspenders: even if the git tarball's copies drift from what we
+# snapshotted, our snapshots win. This makes the answer-file mechanism
+# deterministic regardless of what happens upstream on master.
+
+- name: Overlay snapshotted so-setup + supporting scripts
+  ansible.builtin.copy:
+    src: "setup-automation-source/{{ item }}"
+    dest: "{{ so_source_dest }}/setup/{{ item }}"
+    mode: '0755'
+    owner: root
+    group: root
+  loop: "{{ so_snapshot_files }}"
+
+- name: Ensure automation dir exists in extracted source (older tarballs may lack it)
+  ansible.builtin.file:
+    path: "{{ so_source_dest }}/setup/automation"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+# --- Disable UFW; SO uses its own so-firewall ----------------------------
+
+- name: Stop + disable UFW (SO uses so-firewall which conflicts)
+  ansible.builtin.systemd:
+    name: ufw
+    state: stopped
+    enabled: no
+  failed_when: false   # ufw may not be installed on all images

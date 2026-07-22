@@ -1,0 +1,61 @@
+---
+# =========================================================================
+# vyos_mirror — GRE tunnel + tc mirred on router-0 to feed so-sensor-1
+# =========================================================================
+
+# --- Declarative: GRE tunnel via VyOS config -----------------------------
+
+- name: Configure GRE tunnel {{ vyos_gre_tunnel_iface }} -> so-sensor-1
+  vyos.vyos.vyos_config:
+    lines:
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} encapsulation gre"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} source-address {{ vyos_gre_source_ip }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} remote {{ vyos_gre_remote_ip }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} address {{ vyos_gre_local_addr }}/{{ vyos_gre_tunnel_prefix }}"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} description 'so-mirror to sensor'"
+    save: yes
+
+- name: Verify GRE tunnel is up (ip link show)
+  vyos.vyos.vyos_command:
+    commands:
+      - "run show interfaces tunnel {{ vyos_gre_tunnel_iface }}"
+  register: gre_status
+  changed_when: false
+
+- name: Report GRE tunnel state
+  ansible.builtin.debug:
+    msg: "{{ gre_status.stdout_lines[0][:15] }}"
+
+# --- Imperative: tc mirror script deploy + run ---------------------------
+
+- name: Deploy tc-mirror script to VyOS postconfig hook
+  ansible.builtin.template:
+    src: tc-mirror.sh.j2
+    dest: "{{ vyos_mirror_script_path }}"
+    mode: '0755'
+    owner: root
+    group: vyattacfg
+  register: tc_script
+
+- name: Run tc-mirror script now (would otherwise wait for reboot)
+  ansible.builtin.command: "/bin/vbash {{ vyos_mirror_script_path }}"
+  register: tc_run
+  changed_when: "'tc rules applied' in tc_run.stdout"
+  # Retry once — if the tunnel just came up, tc may need a moment to see it.
+  retries: 2
+  delay: 3
+  until: tc_run.rc == 0
+
+- name: Verify tc mirror filters exist on first source interface
+  ansible.builtin.command: "tc filter show dev {{ vyos_mirror_source_interfaces[0] }} ingress"
+  register: tc_verify
+  changed_when: false
+  failed_when:
+    - "'mirred' not in tc_verify.stdout"
+
+- name: Report mirror state
+  ansible.builtin.debug:
+    msg: |
+      vyos_mirror OK:
+        Tunnel {{ vyos_gre_tunnel_iface }}: {{ vyos_gre_source_ip }} -> {{ vyos_gre_remote_ip }}
+        Mirroring {{ vyos_mirror_source_interfaces | length }} interfaces: {{ vyos_mirror_source_interfaces | join(', ') }}

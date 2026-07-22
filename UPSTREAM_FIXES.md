@@ -89,3 +89,67 @@ verify at deploy-time via SHA compare — a silent upstream change to
 `setup/automation/` mechanism be included in the next tagged release
 and its schema documented. Without upstream buy-in we're pinning to
 un-tagged code indefinitely.
+
+---
+
+## 2026-07-21 · gap · Security Onion 2.4 airgap install is CentOS-only
+
+**Symptom.** With snapshot templates for `distributed-airgap-{manager,search,sensor}`
+staged and the plan of `so-setup iso <airgap-answer-file>` on Ubuntu 22.04,
+the install would immediately abort.
+
+**Detection.** Reading `setup/so-setup` lines 83-90 at pinned master SHA:
+```
+if [[ "$setup_type" == 'iso' ]]; then
+    if [[ $is_centos ]]; then
+        is_iso=true
+    else
+        echo "Only use 'so-setup iso' for an ISO install on CentOS. Please run 'so-setup network' instead."
+        exit 1
+    fi
+fi
+```
+
+`so-setup iso` is guarded on CentOS/RHEL/Rocky. Ubuntu targets must use
+`so-setup network`. Cross-referenced with the `setup/automation/`
+directory listing at the same SHA: SO ships `distributed-airgap-*`
+(CentOS-only), `distributed-iso-*` (CentOS-only), `distributed-net-centos-*`,
+`distributed-net-ubuntu-*`, and `distributed-net-ubuntu-suricata-*`.
+There is NO `distributed-airgap-ubuntu-*` or equivalent — airgap-from-ISO
+is not a supported mode on Ubuntu 2.4.
+
+**Root cause.** SO 2.4's airgap mode assumes an ISO with baked-in CentOS
+packages that get exposed via `/etc/yum.repos.d/airgap_repo.repo`. Ubuntu
+apt has no equivalent mechanism in SO's setup scripts.
+
+**Impact.** Original plan (decision #4 in `[[project_so_architecture_decisions]]`:
+airgap install using ansible-hosted ISO mirror) is incompatible with
+decision to use base Ubuntu 22.04 images. Only three paths remained:
+switch to Rocky, network-mode install via corp proxy, or build a real
+local APT mirror.
+
+**Chosen path** (per user 2026-07-21): **network install via corp proxy**.
+Simpler; no blueprint change; abandons decision #4's local mirror in
+favor of speed-to-working-deploy. Local mirror can be reintroduced later
+by adding an apt-mirror role that pulls from packages.securityonion.net
++ Docker + Elastic apt repos.
+
+**Fix (overlay, this project).**
+- Snapshotted `distributed-net-ubuntu-{manager,search,sensor}` from same
+  pinned master SHA into `files/setup-automation-source/` (alongside the
+  distributed-airgap-* snapshots we already had — kept for reference).
+- Updated group_vars/all.yml: dropped `so_iso_*` variables; added
+  `so_setup_type: "network"`, `so_answer_template: "distributed-net-ubuntu"`,
+  `so_upstream_proxy: "http://10.255.240.1:3128"`.
+- Reduced so_apt_mirror role scope: no longer serves ISO; still serves
+  the pinned SO source tarball (source snapshot is version-locked
+  regardless of install mode).
+- so_base role sets system-wide `HTTP_PROXY`/`HTTPS_PROXY` +
+  `/etc/apt/apt.conf.d/95so-proxy` pointing at corp proxy so `so-setup
+  network`'s upstream apt/curl calls succeed.
+
+**Follow-up.** File a docs issue with SO asking for either (a) an Ubuntu
+airgap mode or (b) explicit doc that airgap is CentOS-only + guidance
+for Ubuntu airgap (via local APT mirror). Also: file a docs issue for
+the walkthrough at `docs/Security Onion 2.4.X Deployment Overview_.docx`
+— it references airgap on Ubuntu template implicitly and is misleading.

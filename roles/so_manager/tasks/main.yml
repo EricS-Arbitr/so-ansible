@@ -1,0 +1,145 @@
+---
+# =========================================================================
+# so_manager — render answer file, invoke so-setup network, verify install
+# =========================================================================
+
+# --- Idempotency: skip everything if SO is already installed -------------
+
+- name: Idempotency probe — has so-setup already completed on this host?
+  ansible.builtin.stat:
+    path: "{{ so_manager_installed_marker }}"
+  register: so_installed
+
+- name: End play early on this host if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+# --- Precondition: so_base's source extract must be present --------------
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
+  ansible.builtin.fail:
+    msg: |
+      SO source not present at {{ so_source_dest }}/setup/so-setup.
+      so_base role must run before so_manager. Re-run 30-prereqs.yml.
+  when: not so_setup_present.stat.exists
+
+# --- Compute NIC name + netmask from ansible_facts -----------------------
+# so_prod_nic: the interface whose IPv4 address matches so_prod_ip.
+# so_prod_netmask: dotted-quad from so_prod_prefix (e.g. 24 -> 255.255.255.0).
+# Netmask conversion uses the built-in ipv4() filter via ansible.utils
+# once added to requirements.yml; fallback below uses a lookup table for
+# the common prefixes (16/24/28/29/30) so we don't add a runtime dep.
+
+- name: Gather facts (need ansible_facts['interfaces'] + per-iface ipv4)
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic from ansible_facts (interface with so_prod_ip)
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask from prefix
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {
+        16: '255.255.0.0',
+        20: '255.255.240.0',
+        22: '255.255.252.0',
+        23: '255.255.254.0',
+        24: '255.255.255.0',
+        25: '255.255.255.128',
+        26: '255.255.255.192',
+        27: '255.255.255.224',
+        28: '255.255.255.240',
+        29: '255.255.255.248',
+        30: '255.255.255.252',
+        31: '255.255.255.254',
+        32: '255.255.255.255',
+      }[so_prod_prefix | int] }}
+
+- name: Sanity print the computed values
+  ansible.builtin.debug:
+    msg: "MNIC={{ so_prod_nic }} MIP={{ so_prod_ip }}/{{ so_prod_prefix }} = {{ so_prod_netmask }} MGATEWAY={{ so_prod_gateway }}"
+
+# --- Render + drop the answer file ---------------------------------------
+
+- name: Render manager answer file
+  ansible.builtin.template:
+    src: manager.conf.j2
+    dest: "{{ so_source_dest }}/setup/automation/{{ so_manager_answer_name }}"
+    mode: '0755'
+    owner: root
+    group: root
+
+# --- Invoke so-setup asynchronously --------------------------------------
+
+- name: Kick off so-setup network (long-running, backgrounded)
+  ansible.builtin.shell: |
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} {{ so_manager_answer_name }} > {{ so_manager_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+    creates: "{{ so_manager_installed_marker }}"
+  async: "{{ so_manager_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+
+- name: Poll so-setup completion (every {{ so_manager_poll_interval }}s up to {{ so_manager_install_timeout }}s)
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_manager_install_timeout / so_manager_poll_interval) | int }}"
+  delay: "{{ so_manager_poll_interval }}"
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_manager_setup_log }} on {{ inventory_hostname }}.
+  when: so_setup_result.rc | default(1) != 0
+
+# --- Post-install reboot + wait ------------------------------------------
+
+- name: Reboot the manager (SKIP_REBOOT=1 in answer file deferred it)
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+
+# --- Verify -------------------------------------------------------------
+
+- name: Verify so-status green
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  # so-status returns non-zero when any service is down; give SO ~2 min
+  # to converge post-reboot.
+  retries: 8
+  delay: 15
+  until: so_status.rc == 0
+
+- name: Report manager status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"

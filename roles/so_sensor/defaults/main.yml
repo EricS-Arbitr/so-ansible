@@ -1,0 +1,9 @@
+---
+so_sensor_answer_name: "so-ansible-sensor"
+so_sensor_install_timeout: 1200   # 20 min (similar to search)
+so_sensor_poll_interval: 30
+so_sensor_setup_log: "/root/so-setup.log"
+so_sensor_installed_marker: "/opt/so/state/installed"
+
+# Netplan drop-in path for our GRE tunnel.
+so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
