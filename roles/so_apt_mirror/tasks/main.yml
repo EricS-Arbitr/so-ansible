@@ -128,6 +128,12 @@
     state: started
     enabled: yes
 
+# Flush any pending `reload nginx` handlers now so the smoke test hits
+# nginx running with OUR so-mirror site config, not the still-default
+# nginx from install. Handlers otherwise queue until end-of-play.
+- name: Flush handlers so nginx reload happens before smoke test
+  ansible.builtin.meta: flush_handlers
+
 - name: Smoke test — SO source tarball reachable via HTTP
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
