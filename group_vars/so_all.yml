@@ -38,6 +38,14 @@ so_msrv_ip: "{{ so_manager_ip }}"
 # from each host's host_vars via the templates.
 so_address_type: "STATIC"
 
+# --- SSH auth to all SO Linux nodes (fresh Ubuntu — no keys pre-shared) ---
+# Falls back to sshpass when key auth fails. Vault password is the same
+# Simspace1!Simspace1! form that PowerPlant/airfield-range use for fresh
+# platform-baked Ubuntu images.
+ansible_password: "{{ vault_simspace_password }}"
+# Belt-and-suspenders — become password same as SSH password.
+ansible_become_password: "{{ vault_simspace_password }}"
+
 # --- Docker + so-allow ---
 so_docker_range: "172.17.0.0/16"    # default; keep so-setup happy without prompt
 so_web_access_type: "IP"             # IP or HOSTNAME
