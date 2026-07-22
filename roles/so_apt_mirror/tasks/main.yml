@@ -134,6 +134,20 @@
 - name: Flush handlers so nginx reload happens before smoke test
   ansible.builtin.meta: flush_handlers
 
+# Belt-and-suspenders: on subsequent runs where the site file is already
+# in place (no change → no notify → no flush), nginx would still be
+# running whatever config it loaded last. Explicit test + reload catches
+# that case. Idempotency cost: `changed=1` on every run (harmless — a
+# reload is instant + doesn't drop connections).
+- name: Validate nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Reload nginx to pick up our so-mirror site (unconditional)
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+
 - name: Smoke test — SO source tarball reachable via HTTP
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
