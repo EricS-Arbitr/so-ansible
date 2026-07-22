@@ -153,3 +153,66 @@ airgap mode or (b) explicit doc that airgap is CentOS-only + guidance
 for Ubuntu airgap (via local APT mirror). Also: file a docs issue for
 the walkthrough at `docs/Security Onion 2.4.X Deployment Overview_.docx`
 — it references airgap on Ubuntu template implicitly and is misleading.
+
+---
+
+## 2026-07-21 (later) · gap · airfield-range `common` + range-development-ansible `init` roles unusable for so-ansible
+
+**Symptom.** First live dry-run of phase 10 (mirror) failed on the
+ansible controller itself with `'network_interfaces' is undefined`.
+Attempts 2 + 3 same error → deploy loop exhausted.
+
+**Root cause.** The airfield-range `common` role was copied per the
+role-sourcing policy but its Linux task file
+(`roles/common/tasks/linux.yml`) is a full NetworkManager reconfig
+driven by a `network_interfaces` host_vars dict of the form:
+```
+network_interfaces:
+  - name: Ethernet0
+    ipv4: {type: static, address: ..., netmask: ..., gateway: ...}
+    dns: [...]
+```
+
+so-ansible host_vars use flat scalar fields (`so_prod_ip`,
+`so_prod_prefix`, `so_prod_gateway`, `so_prod_dns`) — no
+`network_interfaces` dict. The common role's first `loop:
+"{{ network_interfaces }}"` blows up with the "undefined" error.
+
+Even if we defined the dict, running `common` is the wrong play here:
+1. On the ansible controller (`10-mirror.yml`), the box is up + working;
+   reconfiguring its NetworkManager + tearing down systemd-networkd +
+   forcing a reboot mid-deploy is asking for a broken controller.
+2. On SO nodes (`30-prereqs.yml`), `so-setup network` does its OWN
+   netplan write for the MNIC based on the answer file's MIP/MMASK/
+   MGATEWAY/MDNS. Running common's netplan writes before so-setup
+   would conflict.
+
+Also discovered same session: `range-development-ansible`'s `init`
+role is Windows-only (`win_ping` + `wait_for_connection` targeting
+Windows). Blindly copied per role-sourcing policy but no Linux value.
+
+**Fix (overlay).** Dropped `common`, `init`, `handlers` (dep of common)
+from `roles/` entirely. Removed the corresponding role references from
+`playbooks/10-mirror.yml` and `playbooks/30-prereqs.yml`. so_base is
+now the single source of Linux prep for SO nodes:
+- apt prereqs
+- proxy env + APT proxy
+- /etc/hosts peer entries
+- SO source tarball fetch + snapshotted so-setup overlay
+- UFW disabled
+
+The ansible controller runs ONLY `so_apt_mirror` (no baseline reconfig).
+
+**Follow-up.** Role-sourcing memory (`project_airfield_role_sourcing`)
+implies "copy every used role from PowerPlant/airfield-range". Should
+amend the memory: **only if the role's schema matches this project's
+host_vars conventions and its behavior is appropriate for the target
+lifecycle**. Blindly copying can produce silent breakage (common's
+Linux path requires a dict we don't use; init is Windows-only). Better
+default: prefer targeted mini-roles authored in-project.
+
+**Related.** `common` still has a `hostname.yml` sub-task file (per
+`common/tasks/hostname.yml`) that IS reusable — just sets `hostname`
+from `inventory_hostname`. If we ever need explicit hostname
+management (SO's HOSTNAME answer var covers this today), pull out
+that sub-task standalone rather than importing all of common.

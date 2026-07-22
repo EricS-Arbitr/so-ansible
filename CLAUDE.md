@@ -63,13 +63,14 @@ dual-homed with `.165` on mgmt plane. VyOS ansible target uses
 
 ## 5. Roles (copied vs authored)
 
-**Copied** (per role-sourcing policy — sourced from PowerPlant then airfield-range):
-- `common` — netplan neutralize, apt config, timezone, hostname (bundled `hostname.yml` sub-task)
-- `init` — cross-platform bootstrap
-
-Deliberately NOT copied: `hostname` from range-development-ansible is a
-Windows-only playbook fragment misfiled as a role — not usable on
-Linux. `common/tasks/hostname.yml` handles our needs.
+**Copied** (per role-sourcing policy): none currently. Attempted 2026-07-21
+to copy `common`, `init`, `handlers` from airfield-range — all three
+proved unusable (common expects a `network_interfaces` dict schema we
+don't use + does NM/netplan surgery that conflicts with `so-setup
+network`; init is Windows-only). See UPSTREAM_FIXES.md · 2026-07-21
+(later) entry. If we later need hostname/NM/apt tasks, pull the
+narrowest possible sub-task into a purpose-built role rather than
+importing wholesale.
 
 **Authored here** (SO-specific):
 - `so_apt_mirror` — nginx :80 serving SO ISO on ansible controller

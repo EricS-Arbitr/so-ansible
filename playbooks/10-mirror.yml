@@ -8,10 +8,17 @@
 # so_sensor roles).
 # =========================================================================
 
-- name: SO local mirror — nginx serving ISO on ansible controller
+- name: SO local mirror — nginx serving SO source tarball on ansible controller
   hosts: ansible_controller
   become: true
   gather_facts: true
   roles:
-    - common
+    # NOTE: intentionally NOT running the `common` role here (or on SO
+    # nodes). Discovered 2026-07-21: the airfield-range `common` role
+    # does wholesale NetworkManager + netplan surgery driven by a
+    # `network_interfaces` host_vars dict we don't populate. On the
+    # ansible controller it'd fail with 'network_interfaces is undefined'
+    # and even if we defined it, running netplan surgery on a working
+    # controller is asking for a broken deploy. so_base handles the
+    # cross-cutting SO-side prep; SO's own so-setup handles netplan.
     - so_apt_mirror
