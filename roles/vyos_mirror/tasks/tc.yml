@@ -7,6 +7,19 @@
 # work. Can't be mixed with vyos_config in the same play — modules are
 # connection-specific.
 
+# /config/scripts/ is where VyOS's post-config bootup hook lives, but the
+# dir isn't created by default on a fresh RC-VyOS-Router:1.1.0 image.
+# `template` fails with "Destination directory does not exist" if we
+# don't create it first.
+- name: Ensure /config/scripts/ exists
+  ansible.builtin.file:
+    path: "{{ vyos_mirror_script_path | dirname }}"
+    state: directory
+    mode: '0775'
+    owner: root
+    group: vyattacfg
+  become: true
+
 - name: Deploy tc-mirror script to VyOS postconfig hook
   ansible.builtin.template:
     src: tc-mirror.sh.j2
