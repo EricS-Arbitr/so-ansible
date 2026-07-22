@@ -39,12 +39,12 @@ so_msrv_ip: "{{ so_manager_ip }}"
 so_address_type: "STATIC"
 
 # --- SSH auth to all SO Linux nodes (fresh Ubuntu — no keys pre-shared) ---
-# Falls back to sshpass when key auth fails. Vault password is the same
-# Simspace1!Simspace1! form that PowerPlant/airfield-range use for fresh
-# platform-baked Ubuntu images.
-ansible_password: "{{ vault_simspace_password }}"
+# Falls back to sshpass when key auth fails. Note: the RDP_Ubuntu_Desktop
+# image uses the SHORTER "simspace1" password form (verified 2026-07-22),
+# not the Simspace1!Simspace1! form used elsewhere.
+ansible_password: "{{ vault_so_simspace_password }}"
 # Belt-and-suspenders — become password same as SSH password.
-ansible_become_password: "{{ vault_simspace_password }}"
+ansible_become_password: "{{ vault_so_simspace_password }}"
 
 # --- Docker + so-allow ---
 so_docker_range: "172.17.0.0/16"    # default; keep so-setup happy without prompt
