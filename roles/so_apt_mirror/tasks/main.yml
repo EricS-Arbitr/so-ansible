@@ -8,6 +8,24 @@
 # packages come from upstream via corp proxy during so-setup.
 # =========================================================================
 
+# APT proxy must be configured BEFORE the first apt update, otherwise
+# ubuntu.archive.ubuntu.com is unreachable through the range's mgmt plane.
+# (First live dry-run on 2026-07-21 failed here with "Failed to update
+# apt cache: unknown reason" because the RC_NG_Ansible image doesn't
+# ship with apt proxy pre-configured — only env vars.)
+- name: APT proxy for the ansible controller's own apt calls
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95so-proxy
+    mode: '0644'
+    content: |
+      # Added by so_apt_mirror role so apt-get can reach ubuntu.archive
+      # through the range's mgmt-plane HTTP proxy.
+      Acquire::http::Proxy "{{ so_mirror_proxy }}";
+      Acquire::https::Proxy "{{ so_mirror_proxy }}";
+      # Bypass proxy for local (loopback) fetches once nginx is up.
+      Acquire::http::Proxy::127.0.0.1 "DIRECT";
+      Acquire::http::Proxy::localhost "DIRECT";
+
 - name: Install nginx + git (git needed to snapshot SO source)
   ansible.builtin.apt:
     name:

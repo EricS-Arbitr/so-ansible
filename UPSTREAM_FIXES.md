@@ -216,3 +216,37 @@ default: prefer targeted mini-roles authored in-project.
 from `inventory_hostname`. If we ever need explicit hostname
 management (SO's HOSTNAME answer var covers this today), pull out
 that sub-task standalone rather than importing all of common.
+
+---
+
+## 2026-07-22 · gap · so_apt_mirror missing APT proxy config on ansible controller
+
+**Symptom.** Second live dry-run: phase 10 failed on the ansible
+controller with `Failed to update apt cache: unknown reason` at
+`so_apt_mirror : Install nginx + git`.
+
+**Root cause.** The RC_NG_Ansible SimSpace image doesn't ship with an
+apt proxy pre-configured — only shell env vars (`http_proxy`,
+`https_proxy`) in `/etc/environment`. Ansible's `apt` module's
+`update_cache: yes` invokes `apt-get update` which does NOT read
+those env vars; apt reads its own config from `/etc/apt/apt.conf.d/`.
+Without an `Acquire::http::Proxy` directive, apt tries to reach
+`archive.ubuntu.com` directly through the mgmt plane (no route to
+external) and fails silently — Ansible surfaces the generic
+"unknown reason" wrapper.
+
+Notably, `so_base` already has this exact fix for SO nodes (writes
+`/etc/apt/apt.conf.d/95so-proxy` with `Acquire::http::Proxy
+"{{ so_upstream_proxy }}"`). `so_apt_mirror` was missing the same task
+because I incorrectly assumed the controller's apt was pre-configured.
+
+**Fix (overlay).** Prepend an `apt.conf.d/95so-proxy` copy task to
+`so_apt_mirror`, using `so_mirror_proxy` (same value as
+`so_upstream_proxy`) so `apt-get update` can reach ubuntu.archive
+through the range's mgmt-plane HTTP proxy. Task runs before the first
+`apt` module call, so no chicken-and-egg.
+
+**Follow-up.** Ask the platform team to bake `/etc/apt/apt.conf.d/95proxy`
+into the RC_NG_Ansible base image (alongside the existing shell env
+vars). Every project that uses this image hits the same first-run
+"apt update fails" trap and has to solve it in role code.
