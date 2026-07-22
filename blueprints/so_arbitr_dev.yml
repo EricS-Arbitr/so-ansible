@@ -28,7 +28,7 @@ resources:
   properties:
     cidr: "172.16.5.0/24"
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "ansible"
+  name: "Ansible"
   properties:
     image: "global/RC_NG_Ansible:2.1.0"
     networkInterfaces:
@@ -39,43 +39,6 @@ resources:
       ipAddress: "10.255.240.157"
       position: "FIRST"
 - type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "router-0"
-  properties:
-    image: "RC-VyOS-Router:1.1.0"
-    networkInterfaces:
-    - name: "Operations"
-      ipAddress: "172.16.8.1"
-      prefix: 24
-      role: "GATEWAY"
-    - name: "Engineering"
-      ipAddress: "172.16.6.1"
-      prefix: 24
-      role: "GATEWAY"
-    - name: "Services"
-      ipAddress: "172.16.7.1"
-      prefix: 24
-      role: "GATEWAY"
-    - name: "security"
-      ipAddress: "172.16.5.1"
-      prefix: 24
-      role: "GATEWAY"
-    managementInterface:
-      ipAddress: "10.255.240.165"
-      position: "LAST"
-- type: "range.resource.primitive.VmInstance::1.0.0"
-  name: "DC01"
-  metadata: {}
-  properties:
-    image: "global/RDP_Windows_Server_2022:1.2.0"
-    networkInterfaces:
-    - name: "Services"
-      ipAddress: "172.16.7.7"
-      prefix: 24
-    hostname: "rdp-win-2022-0"
-    managementInterface:
-      ipAddress: "10.255.240.121"
-      position: "FIRST"
-- type: "range.resource.primitive.VmInstance::1.0.0"
   name: "eng-wks-01"
   metadata: {}
   properties:
@@ -84,10 +47,17 @@ resources:
     - name: "Engineering"
       ipAddress: "172.16.6.11"
       prefix: 24
-    hostname: "rdp-win-10-1"
     managementInterface:
       ipAddress: "10.255.240.122"
       position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "deploy-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "./deploy.sh | tee /var/log/playbook_run.log\n"
+    timeout: 7200
+    scriptType: "BASH"
 - type: "range.resource.primitive.VmInstance::1.0.0"
   name: "so-manager"
   metadata: {}
@@ -116,6 +86,16 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.101"
       position: "FIRST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "deploy-script-execution"
+  dependsOn:
+  - "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "Ansible"
+    configurationResources:
+    - name: "deploy-script"
 - type: "range.resource.primitive.Subnet::1.0.0"
   name: "Services"
   properties:
@@ -138,3 +118,56 @@ resources:
     managementInterface:
       ipAddress: "10.255.240.102"
       position: "FIRST"
+- type: "range.resource.configuration.ScriptDefinition::1.0.0"
+  name: "download-range-vars-script"
+  properties:
+    cwd: "/etc/ansible"
+    user: "root"
+    content: "wget --no-check-certificate -e use_proxy=yes -e https_proxy=10.255.240.1:3128\
+      \ -O /etc/ansible/so_ab.tgz  https://github.com/EricS-Arbitr/so-ansible/raw/main/so_ab.tgz\
+      \ && tar -xvzf so_ab.tgz\n"
+    scriptType: "BASH"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "DC01"
+  metadata: {}
+  properties:
+    image: "global/RDP_Windows_Server_2022:1.2.0"
+    networkInterfaces:
+    - name: "Services"
+      ipAddress: "172.16.7.7"
+      prefix: 24
+    managementInterface:
+      ipAddress: "10.255.240.121"
+      position: "FIRST"
+- type: "range.resource.primitive.VmInstance::1.0.0"
+  name: "router-0"
+  properties:
+    image: "RC-VyOS-Router:1.1.0"
+    networkInterfaces:
+    - name: "Operations"
+      ipAddress: "172.16.8.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Engineering"
+      ipAddress: "172.16.6.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "Services"
+      ipAddress: "172.16.7.1"
+      prefix: 24
+      role: "GATEWAY"
+    - name: "security"
+      ipAddress: "172.16.5.1"
+      prefix: 24
+      role: "GATEWAY"
+    managementInterface:
+      ipAddress: "10.255.240.165"
+      position: "LAST"
+- type: "range.resource.configuration.VmConfiguration::1.0.0"
+  name: "download-range-vars"
+  properties:
+    selector:
+      matchInstances:
+      - "Ansible"
+    configurationResources:
+    - name: "download-range-vars-script"

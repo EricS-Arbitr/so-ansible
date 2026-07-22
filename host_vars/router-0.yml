@@ -18,14 +18,18 @@ ansible_network_os: "vyos.vyos.vyos"
 # `set system login user vyos authentication public-keys` and remove the
 # password line here.
 
-# Interfaces we want to mirror to the sensor via GRE.
-# vyos_mirror role reads this list to build tc mirred rules + tunnel.
+# Interfaces we want to mirror to the sensor via GRE. Verified 2026-07-22
+# against live `show int` output on router-0 (RC-VyOS-Router:1.1.0 →
+# VyOS 1.5-rolling-202410022214). Interface-to-subnet mapping is:
+#   eth0 = Operations  (172.16.8.1/24)   ← mirror
+#   eth1 = Engineering (172.16.6.1/24)   ← mirror
+#   eth2 = Services    (172.16.7.1/24)   ← mirror
+#   eth3 = security    (172.16.5.1/24)   ← SKIP: SO's own subnet, noise
+#   eth4 = mgmt        (10.255.240.165)  ← SKIP: out-of-band
 vyos_mirror_source_interfaces:
-  - eth1   # Operations subnet ingress+egress
-  - eth2   # Engineering subnet ingress+egress
-  - eth3   # Services subnet (DC + AD)
-  # eth4 (security) intentionally excluded — that's the SO stack itself
-  # and would create noise / feedback loops.
+  - eth0   # Operations subnet ingress+egress
+  - eth1   # Engineering subnet ingress+egress
+  - eth2   # Services subnet (DC + AD)
 
 # GRE tunnel to so-sensor-1.
 vyos_gre_source_ip: "172.16.5.1"       # router's security-subnet IP
