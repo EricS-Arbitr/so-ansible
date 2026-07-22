@@ -103,14 +103,12 @@
     creates: "{{ so_source_dest }}/setup/so-setup"
   when: not so_source_current.stat.exists
 
-- name: Drop marker file to make future runs idempotent
-  ansible.builtin.copy:
-    dest: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
-    content: "SO source pinned to {{ so_git_branch | default('unknown branch') }}@{{ so_git_ref }}\n"
-    mode: '0644'
-  when: not so_source_current.stat.exists
-
-- name: If tarball extracted at top-level (contents-only tarball), rename to securityonion
+# Extract puts the tarball CONTENTS (bin/, salt/, setup/, etc.) at the
+# top of /root/manager_setup because so_apt_mirror tars with `-C
+# /tmp/so_source_build .`. Move them under securityonion/ so the
+# so_source_dest path resolves. Runs BEFORE the marker drop so the
+# marker's destination exists.
+- name: Detect whether tarball extracted at top-level (contents-only)
   ansible.builtin.stat:
     path: "/root/manager_setup/setup/so-setup"
   register: so_setup_at_top
@@ -120,7 +118,6 @@
     set -e
     cd /root/manager_setup
     mkdir -p securityonion
-    # Move everything except the securityonion/ dir itself into it
     for item in *; do
       [ "$item" = "securityonion" ] && continue
       mv "$item" securityonion/
@@ -130,6 +127,13 @@
   when:
     - so_setup_at_top.stat.exists
     - not so_source_current.stat.exists
+
+- name: Drop marker file to make future runs idempotent
+  ansible.builtin.copy:
+    dest: "{{ so_source_dest }}/.so-ansible-pinned-{{ so_git_ref[:12] }}"
+    content: "SO source pinned to {{ so_git_branch | default('unknown branch') }}@{{ so_git_ref }}\n"
+    mode: '0644'
+  when: not so_source_current.stat.exists
 
 - name: Clean up tarball after extract
   ansible.builtin.file:
