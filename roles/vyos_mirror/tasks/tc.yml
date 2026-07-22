@@ -32,7 +32,10 @@
   register: tc_script
 
 - name: Run tc-mirror script now (would otherwise wait for reboot)
-  ansible.builtin.command: "/bin/vbash {{ vyos_mirror_script_path }}"
+  # /bin/vbash doesn't exist on RC-VyOS-Router:1.1.0 (was a legacy VyOS
+  # shell wrapper). Regular bash is fine — the tc commands are plain
+  # kernel calls, no VyOS-CLI machinery needed.
+  ansible.builtin.command: "/bin/bash {{ vyos_mirror_script_path }}"
   become: true
   register: tc_run
   changed_when: "'tc rules applied' in tc_run.stdout"
