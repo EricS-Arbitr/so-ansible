@@ -159,6 +159,24 @@
     owner: root
     group: root
 
+# check_elastic_license() in salt/common/tools/sbin/so-common returns
+# early when TESTING is set (which we set via /root/so-answers.env), so
+# the elastic_license whiptail prompt never fires — but the marker file
+# /opt/so/state/yeselastic.txt that would normally be created there
+# doesn't get touched. Downstream salt state code may check for it.
+# Pre-create to close the gap.
+- name: Ensure /opt/so/state exists
+  ansible.builtin.file:
+    path: /opt/so/state
+    state: directory
+    mode: '0755'
+
+- name: Pre-accept Elastic License 2.0 marker (TESTING skips the prompt)
+  ansible.builtin.copy:
+    dest: /opt/so/state/yeselastic.txt
+    content: "so-ansible: pre-accepted at {{ ansible_date_time.iso8601 | default('unknown') }}\n"
+    mode: '0644'
+
 # --- Disable UFW; SO uses its own so-firewall ----------------------------
 
 - name: Stop + disable UFW (SO uses so-firewall which conflicts)

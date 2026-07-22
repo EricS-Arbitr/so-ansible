@@ -1,11 +1,114 @@
 ---
 # =========================================================================
-# so_search — DEFERRED PENDING PEXPECT WRAPPER (as of 2026-07-22)
-# See roles/so_manager/tasks/main.yml for context.
+# so_search — join manager as SEARCHNODE
 # =========================================================================
+# Structurally identical to so_manager except for template + answer name.
+# Kept as its own role (rather than parameterizing so_manager) so future
+# per-role divergence (heap-tuning, disk layout, etc.) is trivial to add.
 
-- name: STUB — so_search pending pexpect wrapper
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_search_installed_marker }}"
+  register: so_installed
+
+- name: End play early on this host if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+
+- name: Precondition — SO source must be at {{ so_source_dest }}
+  ansible.builtin.stat:
+    path: "{{ so_source_dest }}/setup/so-setup"
+  register: so_setup_present
+
+- name: Fail loudly if so_base didn't stage the source
   ansible.builtin.fail:
     msg: |
-      so_search role is intentionally stubbed pending the pexpect wrapper
-      rewrite scoped for the next session.
+      SO source missing at {{ so_source_dest }}/setup/so-setup. Re-run 30-prereqs.
+  when: not so_setup_present.stat.exists
+
+- name: Gather network facts (need per-iface ipv4)
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+
+- name: Compute so_prod_nic
+  ansible.builtin.set_fact:
+    so_prod_nic: >-
+      {{ (ansible_facts['interfaces']
+          | map('regex_replace', '-', '_')
+          | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined')
+          | selectattr('ipv4.address', 'equalto', so_prod_ip)
+          | map(attribute='device')
+          | list
+          | first) }}
+
+- name: Compute so_prod_netmask
+  ansible.builtin.set_fact:
+    so_prod_netmask: >-
+      {{ {16:'255.255.0.0', 20:'255.255.240.0', 22:'255.255.252.0',
+          23:'255.255.254.0', 24:'255.255.255.0', 25:'255.255.255.128',
+          26:'255.255.255.192', 27:'255.255.255.224', 28:'255.255.255.240',
+          29:'255.255.255.248', 30:'255.255.255.252',
+          31:'255.255.255.254', 32:'255.255.255.255'
+      }[so_prod_prefix | int] }}
+
+- name: Render search answer file to /root/so-answers.env
+  ansible.builtin.template:
+    src: search.env.j2
+    dest: /root/so-answers.env
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Kick off so-setup network (bash-source env then invoke)
+  ansible.builtin.shell: |
+    source /root/so-answers.env
+    cd {{ so_source_dest }}/setup
+    ./so-setup {{ so_setup_type }} > {{ so_search_setup_log }} 2>&1
+  args:
+    executable: /bin/bash
+    creates: "{{ so_search_installed_marker }}"
+  async: "{{ so_search_install_timeout }}"
+  poll: 0
+  register: so_setup_async
+
+- name: Poll so-setup completion
+  ansible.builtin.async_status:
+    jid: "{{ so_setup_async.ansible_job_id }}"
+  register: so_setup_result
+  until: so_setup_result.finished
+  retries: "{{ (so_search_install_timeout / so_search_poll_interval) | int }}"
+  delay: "{{ so_search_poll_interval }}"
+
+- name: Report so-setup exit code + last log lines
+  ansible.builtin.debug:
+    msg: |
+      so-setup rc={{ so_setup_result.rc | default('unknown') }}
+      Last 20 log lines:
+      {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+
+- name: Fail if so-setup exited non-zero
+  ansible.builtin.fail:
+    msg: |
+      so-setup returned {{ so_setup_result.rc }}. Full log at
+      {{ so_search_setup_log }} on {{ inventory_hostname }}.
+  when: so_setup_result.rc | default(1) != 0
+
+- name: Reboot the search node
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
+
+- name: Verify search node has joined the grid (so-status)
+  ansible.builtin.command: sudo so-status
+  register: so_status
+  changed_when: false
+  retries: 8
+  delay: 15
+  until: so_status.rc == 0
+
+- name: Report search node status
+  ansible.builtin.debug:
+    msg: "{{ so_status.stdout_lines[-15:] }}"
