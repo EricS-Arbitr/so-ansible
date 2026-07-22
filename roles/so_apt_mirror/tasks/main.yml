@@ -26,6 +26,19 @@
       Acquire::http::Proxy::127.0.0.1 "DIRECT";
       Acquire::http::Proxy::localhost "DIRECT";
 
+# `apt-get update` via shell so we can tolerate signature errors on
+# unrelated third-party repos baked into the SimSpace image (RC_NG_Ansible
+# ships stale apt.puppet.com + apt.puppetlabs.com with expired signing
+# keys; apt-get update returns non-zero on those and the ansible apt
+# module reports "Failed to update apt cache: unknown reason"). Success
+# on the ubuntu.archive fetches is enough for the nginx + git install
+# that follows.
+- name: apt-get update (tolerating third-party signature warnings)
+  ansible.builtin.shell: apt-get update 2>&1 | tail -3
+  register: apt_update
+  changed_when: "'Fetched' in apt_update.stdout"
+  failed_when: false
+
 - name: Install nginx + git (git needed to snapshot SO source)
   ansible.builtin.apt:
     name:
@@ -33,7 +46,7 @@
       - git
       - ca-certificates
     state: present
-    update_cache: yes
+    update_cache: no    # already done via shell above
 
 - name: Mirror root + subdirs
   ansible.builtin.file:

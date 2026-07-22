@@ -250,3 +250,30 @@ through the range's mgmt-plane HTTP proxy. Task runs before the first
 into the RC_NG_Ansible base image (alongside the existing shell env
 vars). Every project that uses this image hits the same first-run
 "apt update fails" trap and has to solve it in role code.
+
+**Amendment (2026-07-22, same day).** APT proxy conf landed correctly but
+apt still failed with "unknown reason". Direct `sudo apt-get update`
+revealed the actual error: RC_NG_Ansible ships with stale
+`apt.puppet.com` + `apt.puppetlabs.com` sources whose signing keys have
+expired (`EXPKEYSIG 4528B6CD9E61EF26 Puppet, Inc. Release Key`).
+`apt-get update` succeeds fetching ubuntu.archive + security.ubuntu.com
+but returns a non-zero overall exit code because of the puppet-repo
+signature failures. Ansible's `apt` module treats any non-zero from
+`apt-get update` as fatal, hence the misleading "unknown reason"
+wrapper.
+
+**Amended fix (overlay).** Split into two tasks:
+1. `ansible.builtin.shell: apt-get update 2>&1 | tail -3` with
+   `failed_when: false` — swallows the puppet signature error.
+2. `ansible.builtin.apt: ... update_cache: no` — installs using the
+   cache that step 1 refreshed (ubuntu.archive contents are all fresh).
+
+Applied to both `so_apt_mirror` (ansible controller) and `so_base` (SO
+nodes) since the same trap will bite if the SO Ubuntu base image ships
+similar stale third-party sources.
+
+**Additional follow-up.** Ask the platform team to either (a) refresh
+the Puppet signing key + repo state in RC_NG_Ansible, or (b) drop the
+Puppet repos entirely if nothing on the image needs them. Every project
+inherits the stale sources and either fails hard (like we did) or has
+to work around them in role code.

@@ -3,27 +3,9 @@
 # so_base — shared prep for every SO Linux node before so-setup runs
 # =========================================================================
 
-- name: Baseline packages needed for SO 2.4 network install on Ubuntu 22.04
-  ansible.builtin.apt:
-    name:
-      - curl
-      - ca-certificates
-      - python3-apt      # ansible.builtin.apt requires it on target
-      - wget             # so-setup's own downloads fall back to wget
-      - net-tools        # so-setup uses `netstat` for NIC detection
-      - jq               # useful for later grid-status parsing
-    state: present
-    update_cache: yes
-
-# --- Proxy env for so-setup's upstream package fetches -------------------
-
-- name: System-wide proxy env vars (so /etc/environment picks up on login)
-  ansible.builtin.template:
-    src: environment.j2
-    dest: /etc/environment
-    mode: '0644'
-    backup: yes
-
+# APT proxy MUST be written before the first apt call so ubuntu.archive
+# is reachable. Moved here up front (was later in the file); the same
+# task also appears further below to keep it declarative-idempotent.
 - name: APT proxy (so `apt-get update` from so-setup honors the corp proxy)
   ansible.builtin.copy:
     dest: /etc/apt/apt.conf.d/95so-proxy
@@ -34,6 +16,38 @@
       Acquire::https::Proxy "{{ so_upstream_proxy }}";
       # Bypass proxy for our local mirror (fetching SO source tarball).
       Acquire::http::Proxy::{{ so_mirror_host }} "DIRECT";
+
+# apt-get update via shell so we can tolerate signature errors on
+# unrelated third-party repos baked into the SimSpace image (some ship
+# stale apt.puppet.com / apt.puppetlabs.com sources with expired signing
+# keys; apt-get update returns non-zero on those and the ansible apt
+# module surfaces "Failed to update apt cache: unknown reason").
+- name: apt-get update (tolerating third-party signature warnings)
+  ansible.builtin.shell: apt-get update 2>&1 | tail -3
+  register: apt_update
+  changed_when: "'Fetched' in apt_update.stdout"
+  failed_when: false
+
+- name: Baseline packages needed for SO 2.4 network install on Ubuntu 22.04
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - python3-apt      # ansible.builtin.apt requires it on target
+      - wget             # so-setup's own downloads fall back to wget
+      - net-tools        # so-setup uses `netstat` for NIC detection
+      - jq               # useful for later grid-status parsing
+    state: present
+    update_cache: no    # done above via shell to tolerate 3rd-party sig errors
+
+# --- Proxy env for so-setup's upstream package fetches -------------------
+
+- name: System-wide proxy env vars (so /etc/environment picks up on login)
+  ansible.builtin.template:
+    src: environment.j2
+    dest: /etc/environment
+    mode: '0644'
+    backup: yes
 
 # --- /etc/hosts entries for peer SO nodes --------------------------------
 
