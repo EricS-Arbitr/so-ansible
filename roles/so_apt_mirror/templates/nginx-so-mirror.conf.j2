@@ -15,20 +15,19 @@ server {
     autoindex on;
     autoindex_exact_size off;
 
-    # Large-file streaming — the SO ISO is ~5 GB.
+    # Standard streaming (was tuned for the 5 GB ISO with aio + directio,
+    # but ISO handling was dropped 2026-07-21; source tarball is ~30 MB
+    # so sendfile alone is plenty. Also: aio on failed with "unsupported
+    # on this platform" on the SimSpace RC_NG_Ansible kernel/glibc build).
     sendfile on;
     tcp_nopush on;
-    aio on;
-    directio 8m;
 
     location / {
         try_files $uri $uri/ =404;
     }
 
-    # Long timeouts for big-file downloads over slower mgmt-plane.
-    client_max_body_size 10G;
-    proxy_read_timeout 3600;
-    send_timeout 3600;
+    client_max_body_size 100M;
+    send_timeout 300;
 
     access_log /var/log/nginx/so-mirror-access.log;
     error_log  /var/log/nginx/so-mirror-error.log warn;
