@@ -11,13 +11,16 @@
 # dir isn't created by default on a fresh RC-VyOS-Router:1.1.0 image.
 # `template` fails with "Destination directory does not exist" if we
 # don't create it first.
+#
+# NOTE on ownership: legacy VyOS docs recommend group=vyattacfg but that
+# group doesn't exist on RC-VyOS-Router:1.1.0 (chgrp fails "failed to
+# look up group vyattacfg"). Root-owned + 0755 is sufficient for the
+# post-config script to execute at boot.
 - name: Ensure /config/scripts/ exists
   ansible.builtin.file:
     path: "{{ vyos_mirror_script_path | dirname }}"
     state: directory
-    mode: '0775'
-    owner: root
-    group: vyattacfg
+    mode: '0755'
   become: true
 
 - name: Deploy tc-mirror script to VyOS postconfig hook
@@ -25,8 +28,6 @@
     src: tc-mirror.sh.j2
     dest: "{{ vyos_mirror_script_path }}"
     mode: '0755'
-    owner: root
-    group: vyattacfg
   become: true
   register: tc_script
 
