@@ -9,8 +9,14 @@
 # Mgmt: 10.255.240.165/20 (position LAST)
 ansible_host: "10.255.240.165"
 ansible_user: "vyos"
+ansible_password: "{{ vault_vyos_password }}"
 ansible_connection: "network_cli"
 ansible_network_os: "vyos.vyos.vyos"
+# Auth notes: SimSpace RC-VyOS-Router:1.1.0 uses `vyos / Simspace1!` (shorter
+# form than the Linux lab password Simspace1!Simspace1!). Password from
+# vault. If key-based auth is preferred later, drop a public key via
+# `set system login user vyos authentication public-keys` and remove the
+# password line here.
 
 # Interfaces we want to mirror to the sensor via GRE.
 # vyos_mirror role reads this list to build tc mirred rules + tunnel.
