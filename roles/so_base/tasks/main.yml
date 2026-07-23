@@ -181,6 +181,41 @@
     content: "so-ansible: pre-accepted at {{ ansible_date_time.iso8601 | default('unknown') }}\n"
     mode: '0644'
 
+# --- Docker daemon proxy config ------------------------------------------
+# so-setup installs Docker and immediately expects it to pull SO container
+# images (elasticsearch, kibana, nginx, etc. from ghcr.io + registry.k8s.io).
+# Docker does NOT read shell env vars — it needs a systemd drop-in with
+# Environment= lines. Discovered 2026-07-23 after so-setup completed but
+# every container stayed missing because docker pull hit
+# "dial tcp: lookup ghcr.io on 127.0.0.53:53: server misbehaving" (proxy
+# never in the picture). Applied preemptively here so future deploys
+# don't hit the same silent trap.
+- name: Ensure /etc/systemd/system/docker.service.d exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: '0755'
+
+- name: Docker daemon proxy config (env vars ARE NOT enough)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/http-proxy.conf
+    mode: '0644'
+    content: |
+      [Service]
+      # Managed by so-ansible/roles/so_base
+      Environment="HTTP_PROXY={{ so_upstream_proxy }}"
+      Environment="HTTPS_PROXY={{ so_upstream_proxy }}"
+      Environment="NO_PROXY=localhost,127.0.0.1,{% for h in groups['so_all'] %}{{ hostvars[h].so_hostname }},{% endfor %}{{ so_subnet_security }},10.255.240.0/20"
+  register: docker_proxy_conf
+
+- name: systemctl daemon-reload + restart docker if proxy conf changed
+  ansible.builtin.systemd:
+    name: docker
+    daemon_reload: yes
+    state: restarted
+  when: docker_proxy_conf.changed
+  failed_when: false   # docker may not be installed yet on first run — so-setup will install it later
+
 # --- Disable UFW; SO uses its own so-firewall ----------------------------
 
 - name: Stop + disable UFW (SO uses so-firewall which conflicts)
