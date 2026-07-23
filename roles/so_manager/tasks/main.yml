@@ -140,14 +140,16 @@
 
 # --- Verify -------------------------------------------------------------
 
-- name: Verify so-status green
+- name: Verify so-status green (post-reboot Salt highstate takes 5-15 min)
   ansible.builtin.command: sudo so-status
   register: so_status
   changed_when: false
-  # so-status returns non-zero when any service is down; give SO ~2 min
-  # to converge post-reboot.
-  retries: 8
-  delay: 15
+  # Post-reboot, salt-minion needs to apply the full highstate before
+  # so-status stops reporting "System appears to be starting. No
+  # highstate has completed since the system was restarted." Empirically
+  # this takes 5-15 min on the manager. 60 retries × 20s = 20 min ceiling.
+  retries: 60
+  delay: 20
   until: so_status.rc == 0
 
 - name: Report manager status
