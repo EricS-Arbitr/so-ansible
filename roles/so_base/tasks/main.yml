@@ -225,6 +225,48 @@
     enabled: no
   failed_when: false   # ufw may not be installed on all images
 
+# --- Security-subnet scope-link route ------------------------------------
+# SimSpace platform netplan gives each SO node a /32 IP on its prod NIC
+# (eth1) with a default route pointing at 172.16.5.1. Because /32 leaves
+# the kernel unaware of any /24 subnet on eth1, the default gateway is
+# unreachable at boot → the default route silently drops and no
+# 172.16.5.x peer is reachable. so-setup on a joining node bails at
+# "Checking manager connectivity" 60 s in with "Could not reach
+# so-manager" (verified 2026-07-24 on so-search). Fix: add an explicit
+# scope-link route for the security subnet on the prod NIC so ARP
+# resolves for every peer's /32 as though they were all on one L2.
+# Persist via a netplan drop-in AND apply immediately (before so-setup
+# runs) so the current session can also reach the manager.
+- name: netplan drop-in — scope-link route for security subnet on prod NIC
+  ansible.builtin.copy:
+    dest: /etc/netplan/60-so-onlink.yaml
+    mode: '0600'
+    owner: root
+    group: root
+    content: |
+      # Added by so-ansible/roles/so_base — see task note for rationale.
+      network:
+        version: 2
+        ethernets:
+          eth1:
+            routes:
+              - to: {{ so_subnet_security }}
+                scope: link
+  register: netplan_onlink
+
+- name: netplan apply (activates scope-link route)
+  ansible.builtin.command: netplan apply
+  when: netplan_onlink.changed
+  changed_when: netplan_onlink.changed
+
+- name: Confirm we can reach the manager on the prod NIC
+  ansible.builtin.command: "ping -c 2 -W 2 {{ so_manager_ip }}"
+  changed_when: false
+  register: mgr_ping
+  # First run on the manager itself may or may not ping self; skip.
+  when: inventory_hostname != groups['so_manager'][0]
+  failed_when: mgr_ping.rc != 0
+
 # --- Kratos DB bind-mount ownership --------------------------------------
 # so-kratos container runs its entrypoint as UID 928 (kratos user, non-root
 # per the SO dockerfile). Entrypoint's `chown kratos:kratos db.sqlite`

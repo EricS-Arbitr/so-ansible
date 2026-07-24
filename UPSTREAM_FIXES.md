@@ -20,6 +20,50 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-24 · platform · SimSpace platform netplan gives SO nodes a /32 IP with no reachable default gateway, so peer connectivity fails
+
+**Symptom.** so_search's so-setup exits early on `Checking manager
+connectivity` — log shows "Could not reach so-manager" 60 s in.
+Search node then falls through to a partial install (salt-minion up,
+but docker/so-status never install) and the role's `so-status` verify
+fails with `Installation failed - so-status not available`. Manager
+never sees search's salt-key.
+
+**Detection.** On any SO node (verified on so-search):
+```
+$ ip -4 addr show eth1
+3: eth1: inet 172.16.5.15/32 scope global eth1
+$ ip route
+10.255.240.0/20 dev eth0 proto kernel scope link src 10.255.240.101
+$ cat /etc/netplan/99-netcfg-vmware.yaml
+network:
+  ethernets:
+    eth1:
+      addresses:
+        - 172.16.5.15/32
+      routes:
+        - to: default
+          via: 172.16.5.1
+```
+The netplan config *declares* a default gateway at 172.16.5.1, but the
+kernel drops the default route because it has no way to reach
+172.16.5.1: the /32 address on eth1 puts nothing else on that subnet,
+so the gateway is off-link. No `on-link: true` in the netplan config
+either.  `ping 172.16.5.10 → Network is unreachable`.
+
+**Fix.** Add an explicit `scope: link` route for the whole security
+subnet on the prod NIC via a netplan drop-in. This is technically
+correct here — every SO peer is on the same L2 broadcast domain, so
+ARP for any 172.16.5.x resolves on eth1. Also fixes the default
+gateway indirectly: once 172.16.5.0/24 is on-link, 172.16.5.1 becomes
+reachable and netplan's default route installs.
+
+**Workaround.** Baked into `roles/so_base/tasks/main.yml` as a
+`copy: /etc/netplan/60-so-onlink.yaml` + `netplan apply` + verify-ping
+to the manager. Applied to running search/sensor/manager via
+`ip route add 172.16.5.0/24 dev eth1 scope link` (non-persistent — the
+baked netplan drop-in takes over on next `netplan apply`/reboot).
+
 ## 2026-07-23 · bug · Python-based salt state probes fail against loopback because no_proxy CIDR notation is ignored
 
 **Symptom.** Manager deploy hits Phase 40 verify (highstate + so-status)
