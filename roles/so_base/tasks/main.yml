@@ -224,3 +224,40 @@
     state: stopped
     enabled: no
   failed_when: false   # ufw may not be installed on all images
+
+# --- Kratos DB bind-mount ownership --------------------------------------
+# so-kratos container runs its entrypoint as UID 928 (kratos user, non-root
+# per the SO dockerfile). Entrypoint's `chown kratos:kratos db.sqlite`
+# then fails with EPERM because non-root can't chown, and if the file
+# was pre-created as root:root by an earlier init step, kratos can't
+# write to it either → migrate SQL fails with "attempt to write a
+# readonly database" → container crash-loops. Discovered 2026-07-23 on
+# a manager deploy that had all 20 SO container images seeded but never
+# reached serve. Pre-chowning /nsm/kratos/db* to UID:GID 928 lets the
+# first migrate run succeed as UID 928, and after that the chown
+# no-ops (target already matches). Only applies on so_manager hosts —
+# search/sensor don't run kratos.
+- name: Pre-create /nsm/kratos/db owned by kratos container UID (928)
+  ansible.builtin.file:
+    path: /nsm/kratos/db
+    state: directory
+    owner: '928'
+    group: '928'
+    mode: '0700'
+  when: so_role | default('') == 'manager'
+
+- name: Check if kratos db.sqlite already exists
+  ansible.builtin.stat:
+    path: /nsm/kratos/db/db.sqlite
+  register: kratos_db
+  when: so_role | default('') == 'manager'
+
+- name: Fix ownership of pre-existing (empty) kratos db.sqlite
+  ansible.builtin.file:
+    path: /nsm/kratos/db/db.sqlite
+    owner: '928'
+    group: '928'
+    mode: '0600'
+  when:
+    - so_role | default('') == 'manager'
+    - kratos_db.stat.exists

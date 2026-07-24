@@ -130,6 +130,20 @@
       {{ so_manager_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
 
+# so-setup itself does NOT write {{ so_manager_installed_marker }} on
+# successful completion (verified empirically 2026-07-23 — a completed
+# so-setup run left the file absent). Without this marker the
+# idempotency probe at the top of this role false-negatives on
+# re-runs and re-invokes so-setup from scratch. Belt-and-suspenders:
+# touch it after we've confirmed rc==0 above.
+- name: Write installed marker for idempotent re-runs
+  ansible.builtin.file:
+    path: "{{ so_manager_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+
 # --- Post-install reboot + wait ------------------------------------------
 
 - name: Reboot the manager (SKIP_REBOOT=1 in answer file deferred it)

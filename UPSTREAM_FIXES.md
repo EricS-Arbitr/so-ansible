@@ -20,6 +20,69 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-23 · bug · Python-based salt state probes fail against loopback because no_proxy CIDR notation is ignored
+
+**Symptom.** Manager deploy hits Phase 40 verify (highstate + so-status)
+and hangs. `state.apply kratos` runs to `wait_for_kratos` sub-state
+(`http.wait_for_successful_query` against `http://so-manager:4434/`)
+which retries for 300 s and fails with "Statuses [200, 301, 302, 404]
+were not found." Meanwhile `curl -sk --noproxy '*' http://127.0.0.1:4434/`
+returns 307 immediately — kratos is healthy. Manual `curl http://127.0.0.1:4434/`
+(no `--noproxy`) returns 503 with a Squid error page as the body.
+
+**Detection.** `/etc/environment` (rendered by so_base) contained
+`no_proxy="localhost,127.0.0.0/8,10.255.240.0/20,..."`. curl honors
+CIDR notation for no_proxy; **Python's urllib/requests do not** —
+they only match against literal hostnames and `.domain` suffixes.
+Salt's `http.query` uses Python, so `127.0.0.1:4434` was still routed
+through the corp Squid at `10.255.240.1:3128`, which returned 503 for
+the unroutable-from-its-perspective loopback address.
+
+**Fix.** Amend `no_proxy` / `NO_PROXY` to include explicit hostnames
+in addition to CIDR: `127.0.0.1` (explicit IP) plus every SO node's
+short and .localdomain hostname. Both curl (CIDR) and Python (literal
+names) then bypass the proxy for loopback + peer nodes.
+
+**Workaround.** Baked into `roles/so_base/templates/environment.j2`
+via a `{% for h in groups['so_all'] %}` loop appending
+`,{{ h }},{{ h }}.localdomain`. Applied to running manager via `sed`
++ `systemctl restart salt-minion` to pick up new env before proceeding.
+
+## 2026-07-23 · bug · so-kratos crash-loops on first start because /nsm/kratos/db/db.sqlite is pre-created as root:root
+
+**Symptom.** so-kratos container listed as "Up" in `docker ps` but
+`docker logs so-kratos` shows endless `chown: changing ownership of
+'/kratos-data/db.sqlite': Operation not permitted` (dozens of lines,
+one per restart). `docker exec so-kratos ls -la /kratos-data/` shows
+`db.sqlite` owned by root:root, 0 bytes. `/opt/so/log/kratos/kratos-migrate.log`
+shows `attempt to write a readonly database` on every start.
+
+**Detection.** so-kratos container's entrypoint (`/start-kratos.sh`)
+runs as UID 928 (kratos user, non-root — set by USER directive in
+the SO dockerfile). Sequence is: (1) `kratos migrate sql`, (2)
+`chown kratos:kratos db.sqlite`, (3) `chmod 600 db.sqlite`, (4)
+`kratos serve`. `chown` from non-root fails EPERM; but that's cosmetic.
+The real problem: `db.sqlite` was pre-created by an earlier SO init
+step (probably a salt state's `file.managed` or a docker volume
+initializer) as root:root, so migrate can't write to it as UID 928
+→ migrate exits non-zero → container restarts before `serve` → loop.
+
+**Fix.** Pre-chown `/nsm/kratos/db/` and (if it exists) `db.sqlite`
+to UID:GID 928 in the so_base role, before the kratos container ever
+runs. On a fresh install the file doesn't exist yet, so we create
+the parent dir with the right ownership and let kratos create the
+file itself (which then inherits parent-dir group semantics correctly).
+On a broken install (like this one — root-owned empty db.sqlite from
+a prior failed run), pre-chown re-owns it to 928:928 so kratos can
+write.
+
+**Workaround.** Baked into `roles/so_base/tasks/main.yml` as a
+`when: so_role == 'manager'`-guarded stanza after the docker daemon
+proxy config. Applied to running manager via `sudo chown 928:928
+/nsm/kratos/db/db.sqlite && sudo chmod 600 ... && docker restart
+so-kratos`; kratos migrated 663 schemas successfully and started
+serving on 4433/4434.
+
 ## 2026-07-22 (later) · gap · SO's `master` branch is 2.3.300 (legacy); 2.4 development is on `2.4/main` and has NO answer-file mechanism
 
 **Symptom.** Phase 40 fails partway through so-setup: whiptail dialog

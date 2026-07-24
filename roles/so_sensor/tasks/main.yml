@@ -131,6 +131,17 @@
       {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
 
+# so-setup does NOT write this marker on its own (2026-07-23). Touch it
+# after successful completion so the idempotency probe short-circuits
+# subsequent runs. See same task in so_manager for rationale.
+- name: Write installed marker for idempotent re-runs
+  ansible.builtin.file:
+    path: "{{ so_sensor_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+
 # --- Post-install reboot + verify --------------------------------------
 
 - name: Reboot the sensor
