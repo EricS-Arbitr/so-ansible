@@ -106,6 +106,56 @@
     owner: root
     group: root
 
+# --- Grid-join handshake (delegated to manager) -------------------------
+# so-setup only performs a lightweight one-shot handshake at install time
+# via SOREMOTEPASS. It does NOT re-invoke on subsequent minion re-auth,
+# and it does NOT populate so-firewall or generate the per-minion pillar.
+# Result: after so-setup completes with rc=0, the joining node is
+# actually stuck — salt-minion can't reach master (firewall drops
+# TCP 4505/4506), and highstate would fail even if it could
+# (per-minion pillar missing). Verified 2026-07-27 on so-search.
+#
+# Fix: from the joining node's role, delegate three tasks to the manager
+# to finish the grid-join steps that so-setup should have done itself:
+#   1. Add this node's IP to the appropriate so-firewall hostgroup so
+#      TCP 4505/4506 (salt master) opens for it.
+#   2. Run so-minion -o=add to accept the salt-key AND generate the
+#      per-minion pillar files under /opt/so/saltstack/local/pillar/minions/.
+#   3. Kick a state.highstate for the joining node so it pulls docker
+#      + container images + configs from the master in one push.
+
+- name: Grid join — on manager, add this node's IP to searchnode firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost searchnode {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  async: 600
+  poll: 15
+  changed_when: false
+
+- name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
+  ansible.builtin.command: "sudo /usr/sbin/so-minion -o=add -m={{ inventory_hostname }}_{{ so_role }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_min_add
+  # so-minion -o=add returns success both on fresh accept and on "key already
+  # accepted, re-generating pillar" — both are what we want. Only fail on hard errors.
+  failed_when:
+    - so_min_add.rc != 0
+    - "'does not match any unaccepted keys' not in so_min_add.stdout"
+
+- name: Grid join — kick highstate on this node (fire-and-forget; so-status wait below covers it)
+  ansible.builtin.command: "sudo salt {{ inventory_hostname }}_{{ so_role }} state.highstate --async"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+
 - name: Reboot the search node
   ansible.builtin.reboot:
     reboot_timeout: 900
@@ -116,8 +166,12 @@
   ansible.builtin.command: sudo so-status
   register: so_status
   changed_when: false
-  retries: 8
-  delay: 15
+  # Post-reboot, the grid-join highstate pushed above needs to install
+  # docker + pull the elasticsearch/logstash images from the manager's
+  # registry + start the 4 search-node containers (elasticsearch,
+  # logstash, sensoroni, telegraf). Empirically 8-12 min. 40 × 30s = 20 min ceiling.
+  retries: 40
+  delay: 30
   until: so_status.rc == 0
 
 - name: Report search node status

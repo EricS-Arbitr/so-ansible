@@ -142,6 +142,57 @@
     owner: root
     group: root
 
+# --- Grid-join handshake (delegated to manager) -------------------------
+# so-setup only performs a lightweight one-shot handshake at install time.
+# It does NOT populate so-firewall, does NOT generate the per-minion
+# pillar, and does NOT trigger the first highstate. Verified 2026-07-27
+# on so-sensor-1. See so_search/tasks/main.yml for full rationale.
+
+- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  async: 600
+  poll: 15
+  changed_when: false
+
+- name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
+  ansible.builtin.command: "sudo /usr/sbin/so-minion -o=add -m={{ inventory_hostname }}_{{ so_role }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_min_add
+  failed_when:
+    - so_min_add.rc != 0
+    - "'does not match any unaccepted keys' not in so_min_add.stdout"
+
+# so-minion generates the sensor pillar with `sensor.interface: 'bond0'`
+# from /opt/so/saltstack/default/salt/sensor/defaults.yaml. That's wrong
+# for our SimSpace platform where bond0 is an empty placeholder and the
+# actual monitor NIC is tun0 (GRE endpoint fed by vyos_mirror). Left
+# unchanged, suricata + zeek would bind to bond0 and capture zero
+# packets. Override the generated pillar to point at {{ so_monitor_interface }}.
+# Idempotent: sed only fires if 'bond0' is still there.
+- name: Grid join — override sensor.interface in per-minion pillar (bond0 → {{ so_monitor_interface }})
+  ansible.builtin.replace:
+    path: "/opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+    regexp: "^(\\s*interface:\\s*)'bond0'"
+    replace: "\\1'{{ so_monitor_interface }}'"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+
+- name: Grid join — kick highstate on this node (fire-and-forget; so-status wait below covers it)
+  ansible.builtin.command: "sudo salt {{ inventory_hostname }}_{{ so_role }} state.highstate --async"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  changed_when: false
+
 # --- Post-install reboot + verify --------------------------------------
 
 - name: Reboot the sensor
@@ -154,8 +205,12 @@
   ansible.builtin.command: sudo so-status
   register: so_status
   changed_when: false
-  retries: 8
-  delay: 15
+  # Sensor's grid-join highstate installs docker + pulls ~11 container
+  # images (suricata, zeek, strelka x6, steno, sensoroni, telegraf) from
+  # the manager's registry + starts them. Empirically 10-15 min.
+  # 40 × 30s = 20 min ceiling.
+  retries: 40
+  delay: 30
   until: so_status.rc == 0
 
 - name: Report sensor status
