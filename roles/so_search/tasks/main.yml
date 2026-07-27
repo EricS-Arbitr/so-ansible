@@ -95,33 +95,37 @@
       {{ so_search_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
 
-# so-setup does NOT write this marker on its own (2026-07-23). Touch it
-# after successful completion so the idempotency probe short-circuits
-# subsequent runs. See same task in so_manager for rationale.
-- name: Write installed marker for idempotent re-runs
-  ansible.builtin.file:
-    path: "{{ so_search_installed_marker }}"
-    state: touch
-    mode: '0644'
-    owner: root
-    group: root
+# Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
+# master. Grid-join tasks below wait for that key to appear before trying
+# to accept it — otherwise so-minion -o=add races with the minion's own
+# initial auth attempt and hits "does not match any unaccepted keys"
+# (verified 2026-07-27 on so-search first fresh deploy: firewall opened,
+# but pillar generation never happened because the key wasn't yet pending
+# when so-minion ran).
+- name: Reboot the search node
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
 
-# --- Grid-join handshake (delegated to manager) -------------------------
+# --- Grid-join handshake (delegated to manager, POST-reboot) ------------
 # so-setup only performs a lightweight one-shot handshake at install time
 # via SOREMOTEPASS. It does NOT re-invoke on subsequent minion re-auth,
 # and it does NOT populate so-firewall or generate the per-minion pillar.
 # Result: after so-setup completes with rc=0, the joining node is
 # actually stuck — salt-minion can't reach master (firewall drops
 # TCP 4505/4506), and highstate would fail even if it could
-# (per-minion pillar missing). Verified 2026-07-27 on so-search.
+# (per-minion pillar missing).
 #
-# Fix: from the joining node's role, delegate three tasks to the manager
-# to finish the grid-join steps that so-setup should have done itself:
+# Fix: delegate four tasks to the manager to finish grid-join steps
+# so-setup should have done itself:
 #   1. Add this node's IP to the appropriate so-firewall hostgroup so
 #      TCP 4505/4506 (salt master) opens for it.
-#   2. Run so-minion -o=add to accept the salt-key AND generate the
+#   2. Wait for this node's salt-key to appear in Unaccepted (may take
+#      30-90s post-reboot before salt-minion connects + submits key).
+#   3. Run so-minion -o=add to accept the salt-key AND generate the
 #      per-minion pillar files under /opt/so/saltstack/local/pillar/minions/.
-#   3. Kick a state.highstate for the joining node so it pulls docker
+#   4. Kick a state.highstate for this node so it pulls docker
 #      + container images + configs from the master in one push.
 
 - name: Grid join — on manager, add this node's IP to searchnode firewall hostgroup
@@ -137,6 +141,20 @@
   become: true
   async: 600
   poll: 15
+  changed_when: false
+
+- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+  ansible.builtin.command: "sudo /usr/sbin/salt-key --list=unaccepted --no-color"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pending_keys
+  # Salt-minion connects to master within 30-90s post-reboot. Poll for
+  # up to 5 min (30 × 10s) for our key to appear. Without this wait,
+  # so-minion -o=add below races with the minion's own auth and no-ops
+  # with "does not match any unaccepted keys".
+  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  retries: 30
+  delay: 10
   changed_when: false
 
 - name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
@@ -156,20 +174,14 @@
   become: true
   changed_when: false
 
-- name: Reboot the search node
-  ansible.builtin.reboot:
-    reboot_timeout: 900
-    connect_timeout: 60
-    post_reboot_delay: 30
-
 - name: Verify search node has joined the grid (so-status)
   ansible.builtin.command: sudo so-status
   register: so_status
   changed_when: false
-  # Post-reboot, the grid-join highstate pushed above needs to install
-  # docker + pull the elasticsearch/logstash images from the manager's
-  # registry + start the 4 search-node containers (elasticsearch,
-  # logstash, sensoroni, telegraf). Empirically 8-12 min. 40 × 30s = 20 min ceiling.
+  # Post grid-join push: install docker + pull the elasticsearch/logstash
+  # images from the manager's registry + start the 4 search-node containers
+  # (elasticsearch, logstash, sensoroni, telegraf). Empirically 8-12 min.
+  # 40 × 30s = 20 min ceiling.
   retries: 40
   delay: 30
   until: so_status.rc == 0
@@ -177,3 +189,16 @@
 - name: Report search node status
   ansible.builtin.debug:
     msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# so-setup does NOT write this marker on its own (2026-07-23). Touch it
+# AFTER so-status verify passes so the idempotency probe at the top of
+# this role short-circuits ONLY on truly complete runs. If a run fails
+# at grid-join or so-status verify, a re-invocation will re-execute
+# grid-join tasks instead of assuming completion.
+- name: Write installed marker for idempotent re-runs (only after so-status green)
+  ansible.builtin.file:
+    path: "{{ so_search_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root

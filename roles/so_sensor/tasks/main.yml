@@ -131,22 +131,21 @@
       {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
 
-# so-setup does NOT write this marker on its own (2026-07-23). Touch it
-# after successful completion so the idempotency probe short-circuits
-# subsequent runs. See same task in so_manager for rationale.
-- name: Write installed marker for idempotent re-runs
-  ansible.builtin.file:
-    path: "{{ so_sensor_installed_marker }}"
-    state: touch
-    mode: '0644'
-    owner: root
-    group: root
+# Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
+# master. Grid-join tasks below wait for that key to appear before trying
+# to accept it. See so_search/tasks/main.yml for full rationale.
+- name: Reboot the sensor
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    connect_timeout: 60
+    post_reboot_delay: 30
 
-# --- Grid-join handshake (delegated to manager) -------------------------
-# so-setup only performs a lightweight one-shot handshake at install time.
-# It does NOT populate so-firewall, does NOT generate the per-minion
-# pillar, and does NOT trigger the first highstate. Verified 2026-07-27
-# on so-sensor-1. See so_search/tasks/main.yml for full rationale.
+# --- Grid-join handshake (delegated to manager, POST-reboot) ------------
+# See so_search/tasks/main.yml for full rationale. Sensor has one extra
+# step vs search: after so-minion generates the per-minion pillar, we
+# override sensor.interface from the default 'bond0' to
+# {{ so_monitor_interface }} (tun0 on our GRE-mirror setup) — else
+# suricata + zeek would bind to a phantom bond0 and capture 0 packets.
 
 - name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
   ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
@@ -163,6 +162,16 @@
   poll: 15
   changed_when: false
 
+- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+  ansible.builtin.command: "sudo /usr/sbin/salt-key --list=unaccepted --no-color"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pending_keys
+  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  retries: 30
+  delay: 10
+  changed_when: false
+
 - name: Grid join — on manager, so-minion -o=add (accept key + generate per-minion pillar)
   ansible.builtin.command: "sudo /usr/sbin/so-minion -o=add -m={{ inventory_hostname }}_{{ so_role }}"
   delegate_to: "{{ groups['so_manager'][0] }}"
@@ -172,13 +181,6 @@
     - so_min_add.rc != 0
     - "'does not match any unaccepted keys' not in so_min_add.stdout"
 
-# so-minion generates the sensor pillar with `sensor.interface: 'bond0'`
-# from /opt/so/saltstack/default/salt/sensor/defaults.yaml. That's wrong
-# for our SimSpace platform where bond0 is an empty placeholder and the
-# actual monitor NIC is tun0 (GRE endpoint fed by vyos_mirror). Left
-# unchanged, suricata + zeek would bind to bond0 and capture zero
-# packets. Override the generated pillar to point at {{ so_monitor_interface }}.
-# Idempotent: sed only fires if 'bond0' is still there.
 - name: Grid join — override sensor.interface in per-minion pillar (bond0 → {{ so_monitor_interface }})
   ansible.builtin.replace:
     path: "/opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
@@ -193,13 +195,7 @@
   become: true
   changed_when: false
 
-# --- Post-install reboot + verify --------------------------------------
-
-- name: Reboot the sensor
-  ansible.builtin.reboot:
-    reboot_timeout: 900
-    connect_timeout: 60
-    post_reboot_delay: 30
+# --- Verify + marker ---------------------------------------------------
 
 - name: Verify sensor has joined + services up
   ansible.builtin.command: sudo so-status
@@ -216,6 +212,16 @@
 - name: Report sensor status
   ansible.builtin.debug:
     msg: "{{ so_status.stdout_lines[-15:] }}"
+
+# Marker written AFTER so-status verify passes. If grid-join or verify
+# fails, a re-run re-executes grid-join instead of short-circuiting.
+- name: Write installed marker for idempotent re-runs (only after so-status green)
+  ansible.builtin.file:
+    path: "{{ so_sensor_installed_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
 
 # --- Traffic-flow smoke test -------------------------------------------
 

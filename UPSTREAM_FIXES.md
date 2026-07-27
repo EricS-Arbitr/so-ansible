@@ -20,6 +20,71 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-27 (later) · bug · Grid-join tasks ran BEFORE reboot on first fresh deploy; salt-key wasn't yet pending, so-minion no-op'd
+
+**Symptom.** First fully-fresh site.yml deploy: manager came up 14/14
+containers green. Search + sensor's roles reported no failures but on
+inspection had 0 containers running, so-status was still the 62-byte
+stub, salt-keys sat in `Unaccepted Keys`, and per-minion pillars were
+missing. The manager-side firewall entries for both nodes WERE
+correctly populated (iptables INPUT ACCEPT rules on 4505/4506 for
+both IPs), proving the earlier grid-join steps had run.
+
+**Detection.** The role ordering was:
+```
+1. so-setup (async) → rc=0
+2. Write installed marker
+3. Grid-join: firewall includehost
+4. Grid-join: salt-call state.apply firewall
+5. Grid-join: so-minion -o=add    ← race: minion may not have submitted key yet
+6. Grid-join: state.highstate --async
+7. Reboot                          ← minion restarts here, THEN submits key
+8. so-status verify (retry loop)
+```
+Step 5 ran BEFORE step 7. Immediately after so-setup completed the
+salt-minion service was in some intermediate state; the minion's fresh
+key hadn't yet been submitted to master when so-minion -o=add fired.
+so-minion exited with `does not match any unaccepted keys` — our
+`failed_when` idempotency shortcut caught that as "not really a
+failure" (was intended for the re-run case where the key was already
+accepted) and marked the task OK. Pillar generation was silently
+skipped. Step 6's state.highstate --async also fired against a
+non-existent minion. Step 7's reboot restarted salt-minion which
+finally submitted its key — but nobody would accept it now.
+Step 2's marker meant subsequent site.yml retries short-circuited via
+the idempotency probe.
+
+**Fix.** Two-part reorder in both `so_search` and `so_sensor`:
+  1. Move reboot BEFORE grid-join tasks so salt-minion is definitely
+     up + has submitted its key.
+  2. Add an explicit `wait_for_key` step: `salt-key --list=unaccepted`
+     polled 30 × 10s until the joining node's key appears.
+  3. Then run firewall + so-minion + highstate (with the key
+     guaranteed present).
+  4. Move the installed marker to AFTER `so-status verify` passes so
+     failed runs actually re-run grid-join instead of short-circuiting.
+
+**Workaround (this deploy).** Ran the 4 recovery steps manually: `so-minion -o=add`
+for both nodes + `salt state.highstate --async` for both + `sed` on sensor's
+pillar bond0→tun0 + a second highstate on sensor to pick up the tun0 change.
+
+## 2026-07-27 (later) · bug · 60-verify cluster health task fails on search node — so-elasticsearch-query is manager-only
+
+**Symptom.** 60-verify `SO search cluster health` task fails with
+`sudo: so-elasticsearch-query: command not found`.
+
+**Detection.** `/usr/sbin/so-elasticsearch-query` is installed by
+manager-side salt states only. Search nodes get elasticsearch itself
+(the container) but not the wrapper CLI script. Cluster health is a
+whole-cluster metric so querying it from any node (including the
+manager) returns the same result — no reason to require search.
+
+**Fix.** Change `hosts: so_search` → `hosts: so_manager` in the
+elastic-cluster-health play in [playbooks/60-verify.yml](playbooks/60-verify.yml).
+
+**Workaround (this deploy).** Not needed — 60-verify's own second play
+(SOC WebUI etc. on manager) confirmed cluster is up.
+
 ## 2026-07-27 · gap · SO's grid-join handshake is incomplete: firewall + per-minion pillar + first highstate all left to the operator
 
 **Symptom.** so_search's role reports `so-setup rc=0` on the joining node

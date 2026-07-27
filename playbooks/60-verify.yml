@@ -23,8 +23,8 @@
       ansible.builtin.debug:
         msg: "{{ so_status_out.stdout_lines[-20:] }}"
 
-- name: SO search cluster health
-  hosts: so_search
+- name: Elastic cluster health (query from manager; so-elasticsearch-query is manager-only, and cluster health is a whole-cluster metric anyway)
+  hosts: so_manager
   become: true
   gather_facts: false
   tasks:
