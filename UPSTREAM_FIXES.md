@@ -36,7 +36,7 @@ turn you change any entry's status.
 |---|---|---|
 | 2026-07-28 (later 6) | **NetworkManager eth0 profile mismatch — CURRENT BLOCKER** | OPEN |
 | 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
-| 2026-07-28 (later 6) | `BNICS=tun0` ignored; so-setup binds bond0 | OPEN |
+| 2026-07-28 (later 7) | `BNICS=tun0` ignored; so-setup binds bond0 | PROPOSED |
 | 2026-07-28 (later 6) | so-setup "Could not reach so-manager" (non-fatal) | OPEN |
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
 | 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | VERIFIED |
@@ -46,6 +46,65 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-28 (later 7) · gap · `BNICS` is NOT "the interface to monitor"; off-cloud installs hardcode `INTERFACE=bond0`
+
+**Symptom.** Answer file sets `BNICS=tun0`, but so-setup logs
+`Interface set to bond0` and creates a `bond0` (`NO-CARRIER`, state
+`DOWN`, mtu 9000). Suricata and Zeek are pointed at that dead bond, which
+is why the sensor captures nothing.
+
+**Root cause (read from our pinned SO source, 2026-07-28).** `BNICS` means
+"the NICs to enslave into bond0", not "the monitor interface". Three
+places conspire:
+
+1. `so-functions generate_interface_vars()`:
+   ```bash
+   if [[ $is_cloud ]]; then INTERFACE=${BNICS[0]}; else INTERFACE='bond0'; fi
+   ```
+   Off-cloud, `INTERFACE` is hardcoded — `BNICS` is never consulted.
+2. `so-functions configure_network_sensor()` builds `bond0` with
+   `nmcli ... type bond mode 0` off-cloud, vs `type ethernet` on cloud.
+3. `so-common add_interface_bond0()` wraps **all** bond-slave creation in
+   `if ! [[ $is_cloud ]]`, leaving only `ethtool -K` offload-disable and
+   `ip link set ... promisc on` unconditional.
+
+**Why the bond path can never work for us.** A GRE (L3) tunnel is not an
+ethernet device and cannot be enslaved into a bond. Our whole capture
+design is GRE-mirror → `tun0`, so bonding is structurally incompatible,
+not merely misconfigured.
+
+**Fix (applied).** `detect_cloud()` keys off a bare file test —
+`[ -f /etc/SOCLOUD ]` (plus AWS/GCP/Azure signatures). Creating that file
+on the sensor flips all three behaviors at once and nothing else in the
+setup scripts: `INTERFACE` becomes `tun0`, the NM connection is created
+as `type ethernet` instead of a bond, and the slave logic is skipped so
+`tun0` merely gets promisc set — which is exactly what a mirror target
+needs.
+
+Implemented as a `file: state=touch` task in `so_sensor`, gated on a new
+`so_sensor_force_cloud_mode` default (true) so it can be reverted to
+stock behavior with one variable. **No SO script is patched**, which
+CLAUDE.md §8 prefers over editing SO's own files. Sensor-only —
+manager/search have no monitor interface and keep stock behavior.
+
+**Side effect (good).** The role's existing "override sensor.interface
+from bond0 to tun0" pillar step becomes redundant, because `INTERFACE` is
+now `tun0` when the per-minion pillar is first generated. Left in place as
+a harmless idempotent backstop.
+
+**Risks to watch on the next deploy.**
+  - `configure_network_sensor()` applies `ethernet.mtu 9000` to the
+    `INTERFACE` connection. `tun0` is a GRE tunnel at mtu 1476, so NM may
+    reject or warn on the MTU. Watch `/root/errors.log`.
+  - `is_cloud` may have meanings beyond the setup scripts (salt states,
+    pillar defaults) that our 5-file snapshot doesn't cover. Verify with
+    `grep -rn 'SOCLOUD\|is_cloud' /root/manager_setup/securityonion/salt/`
+    on a node before trusting this broadly.
+
+**Status.** PROPOSED — applied and committed, not yet exercised. Note this
+does NOT by itself fix the (later 6) NetworkManager `eth0` failure; that
+is a separate blocker and so-setup will likely still fail there.
 
 ## 2026-07-28 (later 6) · bug · so-setup logs "Errors detected during setup" and exits 0 anyway; NetworkManager profile mismatch on eth0 is the real failure
 

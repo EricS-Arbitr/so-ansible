@@ -12,3 +12,9 @@ so_sensor_setup_marker: "/opt/so/state/setup-completed"
 
 # Netplan drop-in path for our GRE tunnel.
 so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
+
+# Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
+# is the only path that honors BNICS as the monitor interface instead of
+# hardcoding INTERFACE=bond0. See the long comment in tasks/main.yml.
+# Set false to get stock (bond0) behavior back.
+so_sensor_force_cloud_mode: true

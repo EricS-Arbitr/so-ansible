@@ -95,6 +95,40 @@
     owner: root
     group: root
 
+# --- Force so-setup's "cloud" interface path -----------------------------
+# BNICS=tun0 is IGNORED on a normal install. Verified 2026-07-28 against
+# our pinned SO source:
+#
+#   so-functions generate_interface_vars():
+#     if [[ $is_cloud ]]; then INTERFACE=${BNICS[0]}; else INTERFACE='bond0'; fi
+#
+# BNICS is not "the interface to monitor" — it is "the NICs to enslave
+# into bond0", and INTERFACE is hardcoded to bond0 off-cloud. so-setup
+# duly created a bond0 (NO-CARRIER, DOWN, mtu 9000) and pointed Suricata
+# and Zeek at it, which is why the sensor captured nothing.
+#
+# A GRE tunnel cannot be enslaved into a bond, so the bond path can never
+# work for our GRE-mirror design. The cloud path is the one that fits:
+#
+#   so-functions configure_network_sensor(): nmcli type ethernet (not bond)
+#   so-common    add_interface_bond0():      ALL slave logic is wrapped in
+#                                            `if ! [[ $is_cloud ]]` — so it
+#                                            only sets promisc on tun0
+#   so-functions generate_interface_vars():  INTERFACE=${BNICS[0]} = tun0
+#
+# detect_cloud() keys off a bare file test (`[ -f /etc/SOCLOUD ]`), so we
+# opt in without patching any SO script — CLAUDE.md §8 prefers this over
+# editing SO's own files. Sensor-only: manager/search have no monitor
+# interface and should keep stock behavior.
+- name: Force so-setup cloud interface path (makes BNICS=tun0 actually apply)
+  ansible.builtin.file:
+    path: /etc/SOCLOUD
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+  when: so_sensor_force_cloud_mode | bool
+
 # --- Run so-setup + wait ------------------------------------------------
 
 # --- so-setup skip decision (POSITIVE proof, not just an exit code) ------
