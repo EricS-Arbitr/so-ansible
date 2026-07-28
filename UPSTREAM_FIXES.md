@@ -35,7 +35,8 @@ turn you change any entry's status.
 | Date | Item | Status |
 |---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
-| 2026-07-28 (later 8) | **so-setup `StreamClosedException` — CURRENT BLOCKER** | OPEN |
+| 2026-07-28 (later 8) | Master rejects regenerated minion key (stale key) | PROPOSED |
+| 2026-07-28 (later 8b) | Our guard probed `/etc/salt/minion_id`, which never exists | PROPOSED |
 | 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
 | 2026-07-28 (later 7) | `BNICS=tun0` ignored; so-setup binds bond0 | VERIFIED |
 | 2026-07-28 (later 6) | so-setup "Could not reach so-manager" (non-fatal) | OPEN |
@@ -78,17 +79,49 @@ exits 0, but writes `/root/failure`. `/root/errors.log` contains only:
 So the exception is an artifact of the **reinstall path** on a node that
 had a previous install, not a second independent failure.
 
-**Working hypothesis.** `StreamClosedException` during pre-clean is
-probably incidental; the actionable defect is salt-minion failing to
-start and `minion_id` never being written. Whitelisting the exception as
-benign was considered and **rejected** — the minion is genuinely broken,
-so suppressing the error would hide a real failure. The guard behaved
-correctly here.
+**ROOT CAUSE CONFIRMED.** `journalctl -u salt-minion` shows the same
+cycle on all three start attempts (22:47, 22:51, 22:55):
+```
+[INFO    ] Setting up the Salt Minion "so-sensor-1_sensor"
+[INFO    ] Generating keys: /etc/salt/pki/minion
+[CRITICAL] The Salt Master has rejected this minion's public key!
+To repair this issue, delete the public key for this minion on the Salt
+Master and restart this minion.
+salt-minion.service: Main process exited, code=exited, status=77/NOPERM
+```
+so-setup **regenerates the minion keypair on every (re)install**. The
+master still held the OLD public key for `so-sensor-1_sensor`, so it
+rejected the new one. The minion exits before ever presenting a key to
+the Unaccepted queue — which is precisely why the (later 4) grid-join
+wait loop saw an empty list. Same root cause, one layer down.
 
-**Fix.** Not yet determined — need `journalctl -u salt-minion` plus the
-contents of `/etc/salt/minion` and `/etc/salt/minion.d/`.
+**Correction — `minion_id` was a red herring.** This SO version never
+writes `/etc/salt/minion_id`; it sets the id inside `/etc/salt/minion`
+(`id: 'so-sensor-1_sensor'`). The minion was identifying correctly all
+along.
 
-**Status.** OPEN — CURRENT BLOCKER.
+This exposed a **defect in our own (later 4)/(later 6) guard**: it probed
+`/etc/salt/minion_id` as proof of a successful install. That file never
+exists, so `so_setup_can_skip` was permanently false — every attempt
+would have re-run 30-45 min of so-setup forever — and the post-condition
+would have failed even on a genuinely good install. Fixed by probing
+`/etc/salt/minion` instead, in both roles.
+
+**Fix (applied).** Before the reboot, delegate to the manager:
+`salt-key -d <inventory_hostname>_<so_role> -y`, so the stale key is
+removed and the freshly generated one arrives as Unaccepted for the
+existing grid-join tasks to accept. `failed_when: false` because "does
+not match any accepted, unaccepted or rejected keys" is the expected
+no-op on a first install. Gated on `not so_setup_can_skip` so a healthy
+grid member's key is never touched.
+
+`StreamClosedException` is confirmed incidental — it fires once during
+the reinstall cleanup phase and is immediately followed by `result: True`.
+Whitelisting it as benign was considered and **rejected**: the minion was
+genuinely broken, so suppressing the error would have hidden a real
+failure. The guard behaved correctly.
+
+**Status.** PROPOSED — applied and committed, not yet exercised.
 
 ## 2026-07-28 (later 7) · gap · `BNICS` is NOT "the interface to monitor"; off-cloud installs hardcode `INTERFACE=bond0`
 

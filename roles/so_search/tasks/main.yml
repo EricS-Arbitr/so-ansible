@@ -76,9 +76,15 @@
 # present. Either condition alone is insufficient — the marker alone is
 # the bug above, and Salt alone would skip a so-setup that installed Salt
 # then died before finishing.
-- name: Probe for a real Salt install (minion_id)
+# NOTE: do NOT probe /etc/salt/minion_id — this SO version never writes
+# it. It sets `id:` inside /etc/salt/minion instead (verified 2026-07-28:
+# /etc/salt/ held grains, minion, minion.d/, pki/ but no minion_id, while
+# the minion was correctly identifying as so-sensor-1_sensor). Probing
+# minion_id made so_setup_can_skip permanently false, which would re-run
+# 30-45 min of so-setup on every attempt forever.
+- name: Probe for a real Salt install (minion config written by so-setup)
   ansible.builtin.stat:
-    path: /etc/salt/minion_id
+    path: /etc/salt/minion
   register: salt_minion_id
 
 - name: Probe for the salt-minion systemd unit
@@ -185,7 +191,7 @@
 # Second net: even with no failure marker, confirm Salt actually landed.
 - name: Re-probe for Salt after so-setup
   ansible.builtin.stat:
-    path: /etc/salt/minion_id
+    path: /etc/salt/minion
   register: salt_minion_id_after
   when: not so_setup_can_skip
 
@@ -193,7 +199,7 @@
   ansible.builtin.fail:
     msg: |
       so-setup exited 0 on {{ inventory_hostname }} but Salt was never
-      installed — /etc/salt/minion_id does not exist. The exit code lied.
+      installed — /etc/salt/minion does not exist. The exit code lied.
       Do NOT trust rc here. Check {{ so_search_setup_log }} on the host;
       if that file is missing entirely, so-setup never actually ran.
   when:
@@ -210,6 +216,25 @@
     mode: '0644'
     owner: root
     group: root
+  when: not so_setup_can_skip
+
+# so-setup regenerates this minion's keypair on every (re)install. If the
+# master still holds the OLD public key for this minion id, it rejects the
+# new one and salt-minion crash-loops out with 77/NOPERM:
+#   [CRITICAL] The Salt Master has rejected this minion's public key!
+# Verified 2026-07-28 on so-sensor-1. Delete the stale key so the fresh
+# one arrives as Unaccepted and grid-join below can accept it normally.
+# Gated on `not so_setup_can_skip` — only when so-setup just re-ran and we
+# therefore know the keypair was regenerated. Never touch a healthy grid
+# member's key.
+- name: Grid join — delete stale salt key for this minion on the master
+  ansible.builtin.command: "sudo salt-key -d {{ inventory_hostname }}_{{ so_role }} -y"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: stale_key_del
+  changed_when: "'Removed' in stale_key_del.stdout"
+  # "does not match any ... keys" on a first install is the expected no-op.
+  failed_when: false
   when: not so_setup_can_skip
 
 # Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
