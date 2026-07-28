@@ -20,6 +20,63 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-28 · gap · so-soc's suricataengine can't reach rules.emergingthreats.net from inside the container (no proxy env, embedded DNS misbehaves)
+
+**Symptom.** Sensor's suricata logs show
+`W: detect: No rule files match the pattern /etc/suricata/rules/all-rulesets.rules`
++ `W: detect: 1 rule files specified, but no rules were loaded!` The
+rules directory (`/nsm/nids/rules/`, `/opt/so/rules/nids/`) is entirely
+missing on both sensor and manager. Suricata is running but detecting
+nothing.
+
+**Detection.** Read `/opt/sensoroni/logs/sensoroni-server.log` inside
+the so-soc container:
+```
+message":"failed to sync ruleset"
+error":"failed to fetch ruleset: failed to download ruleset:
+        Get \"https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz\":
+        dial tcp: lookup rules.emergingthreats.net on 127.0.0.11:53: server misbehaving"
+```
+Root causes stacked:
+  1. so-soc container has NO proxy env vars (`docker exec so-soc env |
+     grep -i proxy` returns nothing).
+  2. Docker's embedded DNS at 127.0.0.11 can't resolve external hosts
+     without upstream DNS or proxy.
+  3. Even the per-ruleset `proxyURL` field in soc.json's
+     `server.modules.suricataengine.rulesetSources[]` is left empty by
+     so-setup.
+Also affects: elastalertengine's Sigma rules from github.com + the AI
+summary repos + playbooks repo (all fail with the same
+"server misbehaving" DNS error).
+
+**Fix (this repo).** Ship the ETOPEN tarball with our so-ansible
+tarball and serve it from our existing nginx mirror instead of fetching
+from rules.emergingthreats.net. Three moving parts:
+  1. `rules/emerging.rules.tar.gz` at repo root — pre-downloaded on the
+     developer Mac (has internet). `build_tarball.sh` includes `rules/`
+     alongside `files/` if present.
+  2. `so_apt_mirror` role — copies the bundled tarball into
+     `/var/www/so-mirror/so-source/emerging.rules.tar.gz`, generates
+     the `.md5` sibling SOC verifies via, smoke-tests both URLs return
+     200.
+  3. `so_manager` role — after so-status verify, patches
+     `/opt/so/conf/soc/soc.json` to swap
+     `https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz`
+     (+ `.md5`) with `http://{{ so_mirror_url }}/so-source/emerging.rules.tar.gz`
+     and restarts so-soc so the running suricataengine picks up the new
+     source. From-container fetches to the mirror IP work without proxy
+     because URL uses direct IP (no DNS lookup) + docker uses SNAT via
+     the host's default route to reach the ansible controller.
+
+**Deferred.** Sigma rules and AI summaries still won't fetch — they're
+git-clones against github.com. Options for later: (a) mirror those git
+repos too (git http backend on our nginx or gitea), (b) inject
+HTTP_PROXY env into the so-soc container definition in salt state,
+(c) leave sigma/AI disabled if not needed.
+
+**Workaround (pre-fix).** None applied on the current range — this
+fix supersedes the workaround entirely.
+
 ## 2026-07-27 (later) · bug · Grid-join tasks ran BEFORE reboot on first fresh deploy; salt-key wasn't yet pending, so-minion no-op'd
 
 **Symptom.** First fully-fresh site.yml deploy: manager came up 14/14

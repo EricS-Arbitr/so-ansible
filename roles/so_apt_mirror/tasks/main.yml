@@ -100,6 +100,41 @@
     state: absent
   when: not so_source_tarball.stat.exists
 
+# --- Bundled detection rulesets (ETOPEN + friends) -----------------------
+# so-soc's suricataengine tries to fetch ETOPEN from
+# rules.emergingthreats.net but the container has no proxy env vars AND
+# docker's embedded DNS resolver (127.0.0.11) can't reach external hosts.
+# We ship the rules tarball with our so-ansible tarball (see build_tarball.sh
+# rules/ handling), serve it from THIS mirror, and patch soc.json on the
+# manager (see so_manager) to point at the local URL. SOC then fetches
+# from http://10.255.240.157/so-source/emerging.rules.tar.gz which works
+# without proxy or external DNS.
+- name: Check if bundled ETOPEN rules tarball shipped with so-ansible tarball
+  ansible.builtin.stat:
+    path: "{{ so_bundled_rules_src }}"
+  register: bundled_rules
+
+- name: Copy bundled ETOPEN rules to nginx mirror
+  ansible.builtin.copy:
+    src: "{{ so_bundled_rules_src }}"
+    dest: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    remote_src: yes
+  when: bundled_rules.stat.exists
+
+- name: Compute md5 sibling for bundled ETOPEN rules (SOC verifies via .md5)
+  ansible.builtin.shell: |
+    set -e
+    cd "{{ so_mirror_root }}/so-source"
+    md5sum "{{ so_bundled_rules_filename }}" | awk '{print $1}' > "{{ so_bundled_rules_filename }}.md5"
+    chown www-data:www-data "{{ so_bundled_rules_filename }}.md5"
+    chmod 644 "{{ so_bundled_rules_filename }}.md5"
+  args:
+    creates: "{{ so_mirror_root }}/so-source/{{ so_bundled_rules_filename }}.md5"
+  when: bundled_rules.stat.exists
+
 # --- nginx config --------------------------------------------------------
 
 - name: nginx site config for so-mirror
@@ -158,8 +193,20 @@
   retries: 3
   delay: 2
 
+- name: Smoke test — bundled ETOPEN rules + md5 reachable via HTTP (if shipped)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ so_mirror_port }}/so-source/{{ item }}"
+    method: HEAD
+    status_code: 200
+  loop:
+    - "{{ so_bundled_rules_filename }}"
+    - "{{ so_bundled_rules_filename }}.md5"
+  changed_when: false
+  when: bundled_rules.stat.exists
+
 - name: Report mirror status
   ansible.builtin.debug:
     msg: |
       so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
         SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
+      {% if bundled_rules.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}{% endif %}

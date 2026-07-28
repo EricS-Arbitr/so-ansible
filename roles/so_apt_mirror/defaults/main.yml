@@ -6,3 +6,11 @@ so_mirror_port: 80
 
 # HTTP proxy for git clone of SO source from GitHub (mgmt-plane proxy).
 so_mirror_proxy: "http://10.255.240.1:3128"
+
+# Bundled detection rulesets — pre-downloaded on developer Mac (has
+# internet), shipped in the so-ansible tarball's rules/ dir, served by
+# this mirror at http://{{ so_mirror_host }}/so-source/<filename>.
+# Currently just the ETOPEN emerging.rules for suricata; sigma / AI
+# repos may follow.
+so_bundled_rules_src: "/etc/ansible/rules/emerging.rules.tar.gz"
+so_bundled_rules_filename: "emerging.rules.tar.gz"

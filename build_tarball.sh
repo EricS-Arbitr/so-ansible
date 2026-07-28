@@ -148,6 +148,17 @@ if [ -d "$SO_ANSIBLE/files" ]; then
   find "$STAGE/files" -name '.DS_Store' -delete 2>/dev/null || true
 fi
 
+# rules/ ships pre-downloaded detection ruleset tarballs (currently just
+# the ETOPEN emerging.rules.tar.gz). so-soc's suricataengine can't reach
+# rules.emergingthreats.net through the corp proxy from inside the
+# container (no proxy env vars + docker embedded DNS 127.0.0.11 can't
+# resolve external hosts), so we host the ruleset locally via so_apt_mirror
+# and point soc.json at http://<mirror>/so-source/emerging.rules.tar.gz.
+if [ -d "$SO_ANSIBLE/rules" ]; then
+  cp -R "$SO_ANSIBLE/rules" "$STAGE/"
+  find "$STAGE/rules" -name '.DS_Store' -delete 2>/dev/null || true
+fi
+
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
@@ -157,6 +168,7 @@ TAR_PATHS=(roles host_vars group_vars hosts site.yml playbooks deploy.sh)
 [ -f "vault-tools.sh" ]   && TAR_PATHS+=(vault-tools.sh)
 [ -f "pull-tarball.sh" ]  && TAR_PATHS+=(pull-tarball.sh)
 [ -d "files" ]            && TAR_PATHS+=(files)
+[ -d "rules" ]            && TAR_PATHS+=(rules)
 tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""
