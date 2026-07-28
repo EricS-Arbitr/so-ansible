@@ -34,12 +34,136 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-28 (later 3) | Grid-join `salt-key` hardcoded to wrong path | PROPOSED |
+| 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
+| 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | PROPOSED |
+| 2026-07-28 (later 3) | Grid-join `salt-key` hardcoded to wrong path | VERIFIED |
 | 2026-07-28 | Sensor `tun0` receives no decapped GRE packets | OPEN |
 | 2026-07-28 | so-soc sigma rules + AI summaries still can't git-clone github.com | OPEN (sub-item) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-28 (later 5) · enhancement · Ad-hoc `ansible` on the controller needs `sudo`; only `deploy.sh` documents it implicitly
+
+**Symptom.** Any ad-hoc `ansible <host> -m shell` run as `simspace` dies:
+```
+ERROR! an error occurred while trying to read the file
+'/etc/ansible/group_vars/all/vault.yml': [Errno 13] Permission denied
+```
+
+**Detection.** 2026-07-28 while gathering grid-join diagnostics. Cost a
+full round trip, which is expensive when commands are hand-submitted
+through a web console.
+
+**Root cause.** The tarball extracts over `/etc/ansible/` as root, so
+`group_vars/all/vault.yml` ends up root-owned. `deploy.sh` invokes
+`ansible-playbook` unprefixed, so it only works because the operator runs
+`sudo ./deploy.sh`. Nothing states that, so ad-hoc commands get written
+without it. `vault_password_file` is an absolute path
+(`/home/simspace/.vault_pass`), so `sudo` resolves it fine — the fix is
+just to remember the prefix.
+
+**Fix.** Prefix ad-hoc commands with `sudo`. Longer-term options: relax
+ownership on extract in `pull-tarball.sh`, or have `deploy.sh` re-exec
+itself under sudo so the requirement is explicit rather than folklore.
+
+**Status.** OPEN (documented, not yet automated). Worth a CLAUDE.md §9
+line so it stops recurring.
+
+## 2026-07-28 (later 4) · bug · so-setup exits 0 on the sensor WITHOUT installing Salt; the setup-completed marker then makes it permanent
+
+**Symptom.** so-sensor-1 grid-join fails at the salt-key wait loop with a
+genuinely empty pending list. Manager's full key inventory:
+```
+Accepted Keys:
+so-manager_manager
+so-search_searchnode
+Denied Keys:
+Unaccepted Keys:
+Rejected Keys:
+```
+No sensor key in ANY state.
+
+**Detection.** Controller ad-hoc sweep 2026-07-28 ~19:30. On so-sensor-1:
+  - `systemctl is-active salt-minion` → `inactive`
+  - `systemctl is-enabled salt-minion` → *"No such file or directory"* —
+    **the service unit does not exist**; Salt was never installed
+  - `/etc/salt/minion_id` and `/etc/salt/minion` both absent (grep rc=2)
+  - TCP 4505 + 4506 to the manager (172.16.5.10) → **both OPEN**, so the
+    so-firewall work was correct all along and is exonerated
+
+**Why this got missed for three attempts.** The role's marker logic makes
+a false success permanent:
+  1. `roles/so_sensor/tasks/main.yml` runs so-setup async and gates the
+     shell task on `creates: /opt/so/state/setup-completed`.
+  2. The marker is touched purely on `so_setup_result.rc == 0`.
+  3. If so-setup exits 0 without doing the work, the marker is written,
+     and every subsequent attempt **skips so-setup entirely** — the node
+     can never self-heal, no matter how many times we redeploy.
+This is the same class as the two idempotency bugs already fixed today,
+but inverted: those re-ran work that was done; this one skips work that
+was never done. An rc=0 exit code is too weak a completion proof.
+
+**Note.** so-search uses the identical 20-min `install_timeout` and
+succeeded, so a timeout is NOT the differentiator. The sensor-specific
+variables are `BNICS={{ so_monitor_interface }}` (tun0) and the GRE
+tunnel — tun0 must exist before so-setup validates BNICS.
+
+**ROOT CAUSE CONFIRMED 2026-07-28.** so-setup never ran on the sensor —
+not once. Evidence:
+  - `/root/so-setup.log` **does not exist**. The shell task redirects
+    `> /root/so-setup.log 2>&1`, and a redirect creates its target the
+    instant the shell starts — even if `cd` fails or `./so-setup` is
+    missing. No log file therefore proves the command never executed.
+  - `/opt/so/` contains **only** `state/`. No packages, no `/etc/salt`.
+  - `/opt/so/state/yeselastic.txt` is **ours**, not SO's — it reads
+    `so-ansible: pre-accepted at ...`, written by `so_base` (see its
+    "Pre-accept Elastic License 2.0 marker" task). It is not evidence
+    that so-setup ran, which is how it misled the first analysis.
+  - `tun0` exists and is UP with `10.100.0.2/30`, so the `BNICS=tun0`
+    theory is dead too.
+
+**The actual mechanism — a self-blessing marker.** `creates:` short-circuited
+the shell task, meaning `/opt/so/state/setup-completed` already existed
+before so-setup was ever attempted. That is self-perpetuating:
+  1. When `creates:` is satisfied, Ansible's command module returns
+     **`rc: 0`** together with `skipped: true`.
+  2. The `Fail if so-setup exited non-zero` guard tests only
+     `so_setup_result.rc`, so it **cannot distinguish "so-setup succeeded"
+     from "so-setup was skipped"** — it passes in both cases.
+  3. The role then re-touches the marker (which is why its mtime was
+     19:08 with no log behind it).
+So once the marker exists for ANY reason, it validates itself on every
+subsequent run, and the node becomes permanently unrepairable — the one
+task that would fix it is the one being skipped. Three full redeploy
+attempts could never have helped.
+
+**Fix (applied 2026-07-28).** Replace exit-code gating with positive
+proof, in both `so_search` and `so_sensor`:
+  - Drop `creates:` entirely. Probe instead: `/etc/salt/minion_id` exists
+    AND `salt-minion.service` is a known unit AND the marker exists. Only
+    all three together allow the skip. The marker alone is the bug above;
+    Salt alone would wrongly skip a so-setup that installed Salt and then
+    died mid-way.
+  - Gate the so-setup shell task, its `async_status` poll, the rc check
+    and the marker touch on `when: not so_setup_can_skip`, so a skip no
+    longer flows through the rc guard at all.
+  - Add a **post-condition**: after so-setup returns, re-probe for
+    `/etc/salt/minion_id` and fail loudly if it's absent. Exit code 0 is
+    explicitly not trusted as proof of installation.
+  - Add a debug task printing the skip decision and all three inputs, so
+    the reason is visible in deploy output instead of inferred.
+
+**Self-healing.** No manual cleanup is needed on so-sensor-1. Salt is
+absent there, so `so_setup_can_skip` is false regardless of the stale
+marker, and so-setup will run on the next deploy.
+
+**Status.** PROPOSED — fix applied and committed, needs a deploy to
+confirm so-setup actually runs on the sensor and produces a log. Note the
+*original* question is still unanswered: what created `setup-completed`
+on a node where so-setup never ran? The new debug output plus a real
+`/root/so-setup.log` should reveal it on the next run. Watch for it
+recurring on a genuinely fresh node.
 
 ## 2026-07-28 (later 3) · bug · Grid-join `salt-key` hardcoded to `/usr/sbin/salt-key`, which does not exist
 
@@ -78,10 +202,18 @@ Applied to both `roles/so_search/tasks/main.yml` and
 
 **Workaround.** None — fixed directly.
 
-**Status.** PROPOSED. Needs a deploy run that gets past the wait loop.
-The sensor path is entirely unexercised: so-sensor-1 never reached
-grid-join in this run (the play died on so-search first), so the sensor's
-identical fix has strictly less evidence behind it than the search node's.
+**Status.** VERIFIED — deploy run 2026-07-28 ~19:22. Both halves confirmed
+on the sensor path (the one that had no evidence when this was written):
+  - Preflight task `Grid join — preflight, confirm salt-key is invokable
+    on manager` reported `ok`.
+  - The wait loop's command ran with `rc: 0` and returned real output
+    (`"stdout": "Unaccepted Keys:"`) instead of `command not found`.
+so-search also cleared grid-join entirely this run (`ok=35 changed=0
+failed=0` — role short-circuited on its installed marker, meaning it had
+completed successfully in an earlier attempt).
+
+The task still failed, but for an unrelated reason — the list was
+genuinely empty. See the (later 4) entry above. This fix is done.
 
 ## 2026-07-28 (later 2) · bug · Grid-join `salt-call state.apply firewall` races with the 15-min highstate scheduler
 

@@ -97,6 +97,44 @@
 
 # --- Run so-setup + wait ------------------------------------------------
 
+# --- so-setup skip decision (POSITIVE proof, not just an exit code) ------
+# See so_search/tasks/main.yml for the full rationale. Short version:
+# `creates: <marker>` + "rc == 0" is self-perpetuating — a satisfied
+# `creates:` returns rc=0, so the guard cannot tell success from skip, and
+# the marker re-blesses itself forever. so-sensor-1 was found in exactly
+# that state on 2026-07-28: marker present, no /root/so-setup.log, no Salt
+# installed, no key on the master, and unrepairable by any redeploy.
+- name: Probe for a real Salt install (minion_id)
+  ansible.builtin.stat:
+    path: /etc/salt/minion_id
+  register: salt_minion_id
+
+- name: Probe for the salt-minion systemd unit
+  ansible.builtin.command: systemctl list-unit-files salt-minion.service
+  register: salt_unit_probe
+  changed_when: false
+  failed_when: false
+
+- name: Probe for the so-setup completion marker
+  ansible.builtin.stat:
+    path: "{{ so_sensor_setup_marker }}"
+  register: so_setup_marker_stat
+
+- name: Decide whether the 30-45 min so-setup call can be skipped
+  ansible.builtin.set_fact:
+    so_setup_can_skip: >-
+      {{ so_setup_marker_stat.stat.exists
+         and salt_minion_id.stat.exists
+         and 'salt-minion.service' in salt_unit_probe.stdout }}
+
+- name: Report so-setup skip decision
+  ansible.builtin.debug:
+    msg: >-
+      so-setup {{ 'SKIPPED (marker + Salt both present)' if so_setup_can_skip
+      else 'WILL RUN' }} — marker={{ so_setup_marker_stat.stat.exists }},
+      minion_id={{ salt_minion_id.stat.exists }},
+      unit={{ 'salt-minion.service' in salt_unit_probe.stdout }}
+
 - name: Kick off so-setup network (bash-source env then invoke)
   ansible.builtin.shell: |
     source /root/so-answers.env
@@ -104,11 +142,10 @@
     ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1
   args:
     executable: /bin/bash
-    # Skip 30-45 min so-setup on retry (see so_search for full rationale).
-    creates: "{{ so_sensor_setup_marker }}"
   async: "{{ so_sensor_install_timeout }}"
   poll: 0
   register: so_setup_async
+  when: not so_setup_can_skip
 
 - name: Poll so-setup completion
   ansible.builtin.async_status:
@@ -117,6 +154,7 @@
   until: so_setup_result.finished
   retries: "{{ (so_sensor_install_timeout / so_sensor_poll_interval) | int }}"
   delay: "{{ so_sensor_poll_interval }}"
+  when: not so_setup_can_skip
 
 - name: Report so-setup exit code + last log lines
   ansible.builtin.debug:
@@ -124,15 +162,38 @@
       so-setup rc={{ so_setup_result.rc | default('unknown') }}
       Last 20 log lines:
       {{ so_setup_result.stdout_lines[-20:] | default(['<no stdout captured>']) | join('\n') }}
+  when: not so_setup_can_skip
 
 - name: Fail if so-setup exited non-zero
   ansible.builtin.fail:
     msg: |
       so-setup returned {{ so_setup_result.rc }}. Full log at
       {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
-  when: so_setup_result.rc | default(1) != 0
+  when:
+    - not so_setup_can_skip
+    - so_setup_result.rc | default(1) != 0
 
-# Marker for so-setup completion (see so_search for rationale).
+# so-setup has been observed exiting 0 without installing anything. An
+# exit code is not proof; re-probe for Salt before blessing the marker.
+- name: Re-probe for Salt after so-setup
+  ansible.builtin.stat:
+    path: /etc/salt/minion_id
+  register: salt_minion_id_after
+  when: not so_setup_can_skip
+
+- name: Fail if so-setup exited 0 but never installed Salt
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited 0 on {{ inventory_hostname }} but Salt was never
+      installed — /etc/salt/minion_id does not exist. The exit code lied.
+      Do NOT trust rc here. Check {{ so_sensor_setup_log }} on the host;
+      if that file is missing entirely, so-setup never actually ran.
+  when:
+    - not so_setup_can_skip
+    - not salt_minion_id_after.stat.exists
+
+# Marker for so-setup completion (see so_search for rationale). Only
+# reached once Salt is confirmed genuinely present above.
 - name: Mark so-setup as completed (short-circuits shell task on retry)
   ansible.builtin.file:
     path: "{{ so_sensor_setup_marker }}"
@@ -140,6 +201,7 @@
     mode: '0644'
     owner: root
     group: root
+  when: not so_setup_can_skip
 
 # Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
 # master. Grid-join tasks below wait for that key to appear before trying
