@@ -34,9 +34,10 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-28 (later 6) | **NetworkManager eth0 profile mismatch — CURRENT BLOCKER** | OPEN |
+| 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
+| 2026-07-28 (later 8) | **so-setup `StreamClosedException` — CURRENT BLOCKER** | OPEN |
 | 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
-| 2026-07-28 (later 7) | `BNICS=tun0` ignored; so-setup binds bond0 | PROPOSED |
+| 2026-07-28 (later 7) | `BNICS=tun0` ignored; so-setup binds bond0 | VERIFIED |
 | 2026-07-28 (later 6) | so-setup "Could not reach so-manager" (non-fatal) | OPEN |
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
 | 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | VERIFIED |
@@ -125,9 +126,22 @@ a harmless idempotent backstop.
     in the running state broke decap since"). That explanation is now
     ruled out, so the tun0 decap bug still needs its own root cause.
 
-**Status.** PROPOSED — applied and committed, not yet exercised. Note this
-does NOT by itself fix the (later 6) NetworkManager `eth0` failure; that
-is a separate blocker and so-setup will likely still fail there.
+**Status.** VERIFIED — deploy run 2026-07-28 ~22:54. `/root/so-setup.log`
+line 105 reads:
+```
+2026-07-28T22:54:16Z | INFO | Interface set to tun0
+```
+replacing the previous `Interface set to bond0`. `grep -c bond0` over the
+whole log drops to 1 (an incidental mention; no bond is built).
+
+**Bonus — this also fixed (later 6)'s NetworkManager error.** `/root/errors.log`
+previously carried both `StreamClosedException` AND `Connection activation
+failed ... device eth0 not available because profile is not compatible
+with device`. After this change the NM error is **gone entirely**; only
+`StreamClosedException` remains. That makes sense: no bond means no NM
+bond/slave profile to activate, so the failing `nmcli con up` never runs.
+The `eth0` in that message was a red herring — it was NM reporting the
+bond-slave profile mismatch, not something wrong with the mgmt NIC.
 
 ## 2026-07-28 (later 6) · bug · so-setup logs "Errors detected during setup" and exits 0 anyway; NetworkManager profile mismatch on eth0 is the real failure
 
