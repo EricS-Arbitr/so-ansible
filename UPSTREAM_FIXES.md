@@ -16,9 +16,72 @@ Severity key:
 - **enhancement** — works but could be more robust or ergonomic
 - **platform** — SimSpace platform-side issue
 
-Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detection → Fix → Workaround.
+Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom →
+Detection → Fix → Workaround → **Status**.
+
+**Status key** (convention added 2026-07-28). Every entry carries exactly one:
+- **PROPOSED** — fix is written + committed but has not yet been exercised
+  on a deploy. Not trustworthy yet.
+- **VERIFIED** — fix confirmed working, with the evidence named (which
+  deploy run, which task output). This is the only status that counts as done.
+- **OPEN** — root cause not yet determined, or deliberately deferred.
+- **SUPERSEDED** — replaced by a later entry; kept for history.
+
+### Open / unverified items (the short list)
+
+Everything not listed here is VERIFIED. Update this table in the same
+turn you change any entry's status.
+
+| Date | Item | Status |
+|---|---|---|
+| 2026-07-28 (later 3) | Grid-join `salt-key` hardcoded to wrong path | PROPOSED |
+| 2026-07-28 | Sensor `tun0` receives no decapped GRE packets | OPEN |
+| 2026-07-28 | so-soc sigma rules + AI summaries still can't git-clone github.com | OPEN (sub-item) |
+| 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-28 (later 3) · bug · Grid-join `salt-key` hardcoded to `/usr/sbin/salt-key`, which does not exist
+
+**Symptom.** After the (later 2) retry fix let the firewall state apply
+succeed, the very next grid-join task burned its full 30 × 10s retry
+budget and died with:
+```
+"cmd": ["sudo", "/usr/sbin/salt-key", "--list=unaccepted", "--no-color"],
+"stderr": "sudo: /usr/sbin/salt-key: command not found"
+```
+
+**Detection.** Deploy run 2026-07-28 ~17:36, attempt 3 of 3, so-search.
+The contradiction is visible in the same file: the task two above it
+invokes `sudo salt-call state.apply firewall` **bare** and works fine.
+
+**Root cause.** Two different families of binary live in two different
+places on an SO node, and we conflated them:
+  - **SO's own helper scripts** → `/usr/sbin/` — `so-firewall`,
+    `so-minion`, `so-status`. Hardcoding `/usr/sbin/` for these is correct
+    and those tasks have always worked.
+  - **Salt's binaries** → `/usr/bin/` (Salt onedir package, symlinked out
+    of `/opt/saltstack/salt/`). `salt-call`, `salt-key`, `salt-run`.
+Only `salt-key` got the wrong prefix.
+
+**Fix.**
+  A. Invoke `salt-key` bare, matching the already-working `salt-call`
+     invocation. sudo's `secure_path` covers `/usr/bin`.
+  B. Add a fail-fast preflight task (`sudo salt-key --version`,
+     `changed_when: false`) immediately before the wait loop. Without it
+     a hard "command not found" is indistinguishable from "key hasn't
+     appeared yet" and gets retried for a full 5 minutes before the real
+     error surfaces — expensive when deploys are driven by hand.
+
+Applied to both `roles/so_search/tasks/main.yml` and
+`roles/so_sensor/tasks/main.yml`.
+
+**Workaround.** None — fixed directly.
+
+**Status.** PROPOSED. Needs a deploy run that gets past the wait loop.
+The sensor path is entirely unexercised: so-sensor-1 never reached
+grid-join in this run (the play died on so-search first), so the sensor's
+identical fix has strictly less evidence behind it than the search node's.
 
 ## 2026-07-28 (later 2) · bug · Grid-join `salt-call state.apply firewall` races with the 15-min highstate scheduler
 
@@ -39,6 +102,13 @@ delegated task in both so_search and so_sensor. 10-min ceiling covers
 the worst-case wait for the highstate to release the lock.
 
 **Workaround.** None — attempted the fix directly.
+
+**Status.** VERIFIED — deploy run 2026-07-28 ~17:30, so-search. Task
+`Grid join — on manager, apply firewall state` logged 13 consecutive
+`FAILED - RETRYING` lines and then reported `changed`. That is exactly
+the designed behavior: it waited out an in-flight highstate (~6.5 min at
+30s/retry) and succeeded on the next free scheduler slot. Well inside the
+20-retry ceiling.
 
 ## 2026-07-28 (later) · bug · Grid-join retry re-invokes 30-45 min of so-setup + so-firewall rejects idempotent re-add
 
@@ -77,6 +147,16 @@ failure by default.
      ```
 
 **Workaround.** None applied — attempted the fix directly.
+
+**Status.** VERIFIED (both symptoms) — deploy run 2026-07-28 ~17:30, so-search.
+  - **A (setup marker):** attempt 3 reached the grid-join tasks without
+    re-running so-setup. Previously each attempt burned 30-45 min there.
+    The `setup-completed` marker short-circuited as designed.
+  - **B (so-firewall idempotency):** task `Grid join — on manager, add
+    this node's IP to searchnode firewall hostgroup` reported `ok` rather
+    than failing. That is the "already exists" path being correctly
+    swallowed by the new `failed_when` — on the prior run this same task
+    was a hard rc=3 failure.
 
 ## 2026-07-28 · KNOWN BUG (DEFERRED) · Sensor's tun0 does not receive decapped GRE packets from the mirror
 
@@ -121,6 +201,26 @@ similar tests. Something in the running state broke decap since.
 loaded but sees no traffic — detection engine is effectively idle.
 Alerting/hunting from wire traffic will not fire until this is fixed.
 Splunk-based log detection (endpoint / DNS / etc.) remains unaffected.
+
+**Status.** OPEN. A one-shot diagnostic script covering all six avenues
+in a single console paste was drafted 2026-07-28 (10 labeled sections:
+live tunnel params, address inventory, modules, netns, netfilter, nstat
+deltas across a 25s dual tcpdump on eth1 + tun0, suricata binding,
+netplan-on-disk). Not yet run, and not yet committed to this repo —
+promote it to `diag_tun0.sh` alongside `verify_so.sh` if it proves out.
+
+**Note on the evidence (2026-07-28).** Two recorded observations are
+mutually inconsistent and one of them must be wrong:
+  - `IpInUnknownProtos` climbing means the kernel found **no handler**
+    for IP proto 47 — i.e. no tunnel matched the packet.
+  - `iptables -F` briefly restoring capture implies a **netfilter drop**.
+For a locally-destined packet, netfilter INPUT runs *before* protocol
+demux, so a DROP there prevents the packet from ever reaching the GRE
+handler — and therefore cannot also increment `IpInUnknownProtos`.
+Resolving which observation is sound is the first job of the diagnostic;
+it captures nstat deltas and INPUT rule counters across the same window
+so the two can be compared directly rather than recalled from separate
+sessions.
 
 ## 2026-07-28 · gap · so-soc's suricataengine can't reach rules.emergingthreats.net from inside the container (no proxy env, embedded DNS misbehaves)
 
@@ -178,6 +278,12 @@ HTTP_PROXY env into the so-soc container definition in salt state,
 
 **Workaround (pre-fix).** None applied on the current range — this
 fix supersedes the workaround entirely.
+
+**Status.** VERIFIED (main path) — the sensor came up with 67K ETOPEN
+rules loaded into suricata, confirmed while investigating the tun0 entry
+above. The mirror-served ruleset + `soc.json` patch work end to end.
+The **Deferred** sigma / AI-summary git-clone gap remains OPEN and is
+tracked as part of this entry rather than separately.
 
 ## 2026-07-27 (later) · bug · Grid-join tasks ran BEFORE reboot on first fresh deploy; salt-key wasn't yet pending, so-minion no-op'd
 
