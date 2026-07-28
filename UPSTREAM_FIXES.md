@@ -34,14 +34,80 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-28 (later 6) | **NetworkManager eth0 profile mismatch — CURRENT BLOCKER** | OPEN |
+| 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
+| 2026-07-28 (later 6) | `BNICS=tun0` ignored; so-setup binds bond0 | OPEN |
+| 2026-07-28 (later 6) | so-setup "Could not reach so-manager" (non-fatal) | OPEN |
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
-| 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | PROPOSED |
+| 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | VERIFIED |
 | 2026-07-28 (later 3) | Grid-join `salt-key` hardcoded to wrong path | VERIFIED |
 | 2026-07-28 | Sensor `tun0` receives no decapped GRE packets | OPEN |
 | 2026-07-28 | so-soc sigma rules + AI summaries still can't git-clone github.com | OPEN (sub-item) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-28 (later 6) · bug · so-setup logs "Errors detected during setup" and exits 0 anyway; NetworkManager profile mismatch on eth0 is the real failure
+
+**Symptom.** With the (later 4) guard in place, so-setup finally ran on
+so-sensor-1 — and the guard caught it lying. `/root/so-setup.log` ends:
+```
+2026-07-28T20:06:08Z | INFO | Verifying setup
+WARNING: Errors detected during setup.
+--------- ERRORS ---------
+[ERROR   ] Encountered StreamClosedException
+Error: Connection activation failed: No suitable device found for this
+connection (device eth0 not available because profile is not compatible
+with device (mismatching interface name)).
+--------------------------
+```
+Exit code: **0**.
+
+**Detection.** Deploy run 2026-07-28 ~20:04-20:06. so-setup ran ~2 min.
+
+**SO writes its own failure signals — use those, not rc.** `ls -la /root/`
+after the run shows:
+  - `/root/failure` (0 bytes) — SO's own failure marker
+  - `/root/errors.log` (231 bytes) — the error text
+  - `/root/sosetup.log` (49K) — SO's own log, MORE detail than the stdout
+    we capture; prior runs rotated to `sosetup.log.<ISO timestamp>`
+  - `/root/accept_changes` (0 bytes)
+
+**Fix (applied).** In both `so_search` and `so_sensor`, check
+`/root/failure` immediately after so-setup and fail if present, slurping
+`/root/errors.log` into the failure message so the reason appears in
+deploy output instead of requiring a manual host visit. The
+`/etc/salt/minion_id` probe from (later 4) is kept as a second net.
+
+This matters more than it looks: Salt **did** install successfully this
+run (`dpkg -s salt-minion` → 3006.19, unit enabled), so the minion_id
+probe alone came close to passing a failed setup. `/root/failure` is the
+signal SO itself trusts.
+
+**Root cause of the underlying failure — NOT yet fixed.** NetworkManager
+cannot activate a profile for `eth0`: *"profile is not compatible with
+device (mismatching interface name)"*. Notes for next session:
+  - The sensor's `eth0` is the **mgmt** NIC (10.255.240.102/20); `eth1` is
+    prod (172.16.5.20/**32** — the SimSpace /32 quirk, see 2026-07-24).
+  - Our answer file sets `MNIC=eth1`, yet the failure names `eth0`.
+  - SO expects NetworkManager; SimSpace images are netplan-managed. This
+    is likely the same class as the 2026-07-24 /32 entry.
+
+**Two more findings from the same log, logged so they aren't re-derived:**
+  1. **`BNICS=tun0` is IGNORED.** so-setup logged `Interface set to
+     bond0` and created a `bond0` (`NO-CARRIER ... state DOWN`, mtu 9000).
+     Our monitor-interface intent is not reaching so-setup at all. This
+     is separate from, and upstream of, the tun0 decap bug — and it may
+     partly explain it, since the existing per-minion pillar override
+     was written assuming so-setup had honored BNICS.
+  2. **`Could not reach so-manager`** after a 60s timeout at 20:04:22,
+     treated as non-fatal and setup continued. Worth understanding — our
+     own `so_base` "Confirm we can reach the manager on the prod NIC"
+     task passed on the same host, so SO's check differs from ours
+     (likely a port probe rather than ICMP).
+
+**Status.** PROPOSED (guard). The guard fix is applied and committed; the
+underlying NetworkManager failure is OPEN and is now the blocker.
 
 ## 2026-07-28 (later 5) · enhancement · Ad-hoc `ansible` on the controller needs `sudo`; only `deploy.sh` documents it implicitly
 
@@ -158,12 +224,29 @@ proof, in both `so_search` and `so_sensor`:
 absent there, so `so_setup_can_skip` is false regardless of the stale
 marker, and so-setup will run on the next deploy.
 
-**Status.** PROPOSED — fix applied and committed, needs a deploy to
-confirm so-setup actually runs on the sensor and produces a log. Note the
-*original* question is still unanswered: what created `setup-completed`
-on a node where so-setup never ran? The new debug output plus a real
-`/root/so-setup.log` should reveal it on the next run. Watch for it
-recurring on a genuinely fresh node.
+**Status.** VERIFIED — deploy run 2026-07-28 ~20:04. The skip decision
+printed `so-setup WILL RUN — marker=True, minion_id=False, unit=True`,
+so-setup actually executed for the first time, and `/root/so-setup.log`
+(29K) now exists. On the following attempt the decision printed
+`marker=False`, confirming the failed run correctly refused to bless
+itself — the self-perpetuating loop is broken. Self-heal worked with no
+manual cleanup, as designed.
+
+Two follow-ups from this verification:
+  - The `unit=True` term was a **false positive at the time it was
+    written** and is now genuinely true: `systemctl list-unit-files
+    salt-minion.service` reports `enabled`, because so-setup did install
+    salt-minion 3006.19 on this run. The earlier `is-enabled` → "No such
+    file or directory" was from before any successful salt install. The
+    probe is sound; requiring all three conditions is what caught the
+    failure.
+  - The original "what created `setup-completed` on a node where so-setup
+    never ran?" question is **still unanswered**. It no longer blocks
+    anything (the marker can no longer bless itself), but watch for it
+    recurring on a genuinely fresh node.
+
+The exit-code problem this entry describes turned out to be real and
+distinct — see (later 6) above.
 
 ## 2026-07-28 (later 3) · bug · Grid-join `salt-key` hardcoded to `/usr/sbin/salt-key`, which does not exist
 

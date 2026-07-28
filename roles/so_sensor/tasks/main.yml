@@ -173,8 +173,44 @@
     - not so_setup_can_skip
     - so_setup_result.rc | default(1) != 0
 
-# so-setup has been observed exiting 0 without installing anything. An
-# exit code is not proof; re-probe for Salt before blessing the marker.
+# so-setup's exit code is NOT trustworthy. Verified 2026-07-28: it logged
+# "WARNING: Errors detected during setup" with a fatal NetworkManager
+# error and still exited 0. SO writes its own signals instead — a
+# /root/failure marker file and /root/errors.log. Check those first;
+# they are authoritative where rc is not.
+- name: Check SO's own failure marker
+  ansible.builtin.stat:
+    path: /root/failure
+  register: so_failure_marker
+  when: not so_setup_can_skip
+
+- name: Read SO's errors.log (for the failure message)
+  ansible.builtin.slurp:
+    src: /root/errors.log
+  register: so_errors_log
+  failed_when: false
+  when: not so_setup_can_skip
+
+- name: Fail if SO flagged its own setup as failed (rc lies; this does not)
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited {{ so_setup_result.rc | default('?') }} but SO wrote
+      its own failure marker at /root/failure on {{ inventory_hostname }}.
+      The exit code is not trustworthy — SO logs "Errors detected during
+      setup" and still returns 0.
+
+      /root/errors.log:
+      {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
+         else '<errors.log unreadable>' }}
+
+      Full setup log: {{ so_sensor_setup_log }} (ours) and /root/sosetup.log
+      (SO's own, more detail). Older runs are kept as
+      /root/sosetup.log.<timestamp>.
+  when:
+    - not so_setup_can_skip
+    - so_failure_marker.stat.exists
+
+# Second net: even with no failure marker, confirm Salt actually landed.
 - name: Re-probe for Salt after so-setup
   ansible.builtin.stat:
     path: /etc/salt/minion_id
