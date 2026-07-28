@@ -104,7 +104,8 @@
     ./so-setup {{ so_setup_type }} > {{ so_sensor_setup_log }} 2>&1
   args:
     executable: /bin/bash
-    creates: "{{ so_sensor_installed_marker }}"
+    # Skip 30-45 min so-setup on retry (see so_search for full rationale).
+    creates: "{{ so_sensor_setup_marker }}"
   async: "{{ so_sensor_install_timeout }}"
   poll: 0
   register: so_setup_async
@@ -131,6 +132,15 @@
       {{ so_sensor_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
 
+# Marker for so-setup completion (see so_search for rationale).
+- name: Mark so-setup as completed (short-circuits shell task on retry)
+  ansible.builtin.file:
+    path: "{{ so_sensor_setup_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
+
 # Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
 # master. Grid-join tasks below wait for that key to appear before trying
 # to accept it. See so_search/tasks/main.yml for full rationale.
@@ -153,6 +163,10 @@
   become: true
   register: fw_add
   changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
 
 - name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
   ansible.builtin.command: sudo salt-call state.apply firewall

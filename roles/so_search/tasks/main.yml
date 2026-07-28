@@ -68,7 +68,10 @@
     ./so-setup {{ so_setup_type }} > {{ so_search_setup_log }} 2>&1
   args:
     executable: /bin/bash
-    creates: "{{ so_search_installed_marker }}"
+    # Skip the 30-45 min so-setup call on retry if the previous attempt
+    # got past it (marker set below). Failed grid-join / verify runs
+    # re-execute grid-join tasks but NOT so-setup itself.
+    creates: "{{ so_search_setup_marker }}"
   async: "{{ so_search_install_timeout }}"
   poll: 0
   register: so_setup_async
@@ -94,6 +97,17 @@
       so-setup returned {{ so_setup_result.rc }}. Full log at
       {{ so_search_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
+
+# Marker for so-setup completion — separate from the final "installed"
+# marker so retries only re-run grid-join + verify, not the 30-45 min
+# so-setup call. See so_search defaults for full rationale.
+- name: Mark so-setup as completed (short-circuits shell task on retry)
+  ansible.builtin.file:
+    path: "{{ so_search_setup_marker }}"
+    state: touch
+    mode: '0644'
+    owner: root
+    group: root
 
 # Reboot FIRST so salt-minion restarts fresh + auto-submits its key to
 # master. Grid-join tasks below wait for that key to appear before trying
@@ -134,6 +148,11 @@
   become: true
   register: fw_add
   changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with 'WARNING - IP ... already exists in hostgroup ...' when
+  # the IP was already added by a previous attempt. That's idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
 
 - name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
   ansible.builtin.command: sudo salt-call state.apply firewall

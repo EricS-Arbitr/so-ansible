@@ -20,6 +20,44 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-28 (later) · bug · Grid-join retry re-invokes 30-45 min of so-setup + so-firewall rejects idempotent re-add
+
+Two idempotency bugs surfaced on the FIRST fully-fresh site.yml deploy
+after the 9710406 grid-join reorder.
+
+**Symptom A.** Every re-attempt of the deploy re-invokes so-setup on
+search + sensor (30-45 min each). The role's shell task uses
+`creates: "{{ so_search_installed_marker }}"` which points at
+`/opt/so/state/installed` — but 9710406 moved that marker write to
+AFTER so-status verify. On a failed grid-join or verify, the marker
+doesn't get written, and the next attempt re-runs so-setup from
+scratch. 3 attempts × 30 min = 90+ min just on so-setup no-op'ing.
+
+**Symptom B.** Grid-join first task fails on retry with rc=3:
+```
+sudo: /usr/sbin/so-firewall: WARNING - IP 172.16.5.15 already exists in hostgroup searchnode
+```
+`so-firewall includehost` is idempotent semantically but returns
+non-zero on the "already exists" path, which ansible sees as a hard
+failure by default.
+
+**Fix.**
+  A. Introduce a separate `so_search_setup_marker` /
+     `so_sensor_setup_marker` at `/opt/so/state/setup-completed`,
+     touched immediately after the `so-setup rc=0` check. The shell
+     task's `creates:` points at this new marker instead of the final
+     `installed` marker. Retries short-circuit past so-setup itself
+     but still re-run grid-join + verify.
+  B. Add `failed_when` to the `so-firewall includehost` task that
+     accepts `'already exists' in fw_add.stderr` as OK:
+     ```yaml
+     failed_when:
+       - fw_add.rc != 0
+       - "'already exists' not in fw_add.stderr"
+     ```
+
+**Workaround.** None applied — attempted the fix directly.
+
 ## 2026-07-28 · KNOWN BUG (DEFERRED) · Sensor's tun0 does not receive decapped GRE packets from the mirror
 
 **Symptom.** With the full stack running (11 sensor containers up,

@@ -5,5 +5,10 @@ so_sensor_poll_interval: 30
 so_sensor_setup_log: "/root/so-setup.log"
 so_sensor_installed_marker: "/opt/so/state/installed"
 
+# Separate marker for so-setup completion (see so_search defaults for
+# rationale). Retries don't re-invoke 30-45 min of so-setup on a failed
+# grid-join or so-status verify.
+so_sensor_setup_marker: "/opt/so/state/setup-completed"
+
 # Netplan drop-in path for our GRE tunnel.
 so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
