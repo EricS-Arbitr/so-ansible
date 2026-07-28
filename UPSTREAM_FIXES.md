@@ -106,14 +106,24 @@ a harmless idempotent backstop.
     analyzed, plus an unrelated `app_is_cloud` ECS field in a Sophos
     Elasticsearch template. No salt state, pillar, or runtime config
     consumes `is_cloud`.
-  - **Remaining edge:** `is_cloud` is exported only during so-setup. If
-    any runtime tool calls `add_interface_bond0()` after install (a salt
-    state re-applying network config, `so-nsmnicconfig`, etc.) it will see
-    `is_cloud` unset, take the non-cloud branch, and try to enslave `tun0`
-    into `bond0` again. `/etc/SOCLOUD` does not help there, because only
-    `detect_cloud()` reads it and runtime tools don't call it. Confirm
-    with `grep -rn add_interface_bond0 /root/manager_setup/securityonion/salt/`
-    — if setup is the only caller, this is a non-issue.
+  - ~~**Remaining edge:** `is_cloud` is exported only during so-setup, so
+    a post-install caller of `add_interface_bond0()` would take the
+    non-cloud branch and retry the `tun0`-into-`bond0` enslave.~~
+    **RESOLVED 2026-07-28 — not reachable.** There are exactly two
+    references to `add_interface_bond0` in the salt tree: its definition
+    in `common/tools/sbin/so-common:36`, and one call from
+    `common/tools/sbin/so-monitor-add:23`. And `so-monitor-add` is itself
+    referenced nowhere but its own usage string (`so-monitor-add:7`) — no
+    salt state, cron, or systemd unit invokes it. It is an operator
+    convenience for adding a monitor NIC by hand, which we never call.
+    So `/etc/SOCLOUD` holds permanently and no highstate can undo it.
+
+    Worth having checked: had a state called it, the fix would have
+    survived install but been torn out by the first 15-minute highstate —
+    and that would have retroactively explained the original tun0 report
+    ("earlier in the same range tun0 was decapping correctly... something
+    in the running state broke decap since"). That explanation is now
+    ruled out, so the tun0 decap bug still needs its own root cause.
 
 **Status.** PROPOSED — applied and committed, not yet exercised. Note this
 does NOT by itself fix the (later 6) NetworkManager `eth0` failure; that
