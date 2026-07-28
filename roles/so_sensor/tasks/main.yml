@@ -172,9 +172,12 @@
   ansible.builtin.command: sudo salt-call state.apply firewall
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
-  async: 600
-  poll: 15
-  changed_when: false
+  register: fw_apply
+  changed_when: fw_apply.rc == 0
+  # Highstate scheduler retry logic (see so_search for full rationale).
+  until: fw_apply.rc == 0
+  retries: 20
+  delay: 30
 
 - name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
   ansible.builtin.command: "sudo /usr/sbin/salt-key --list=unaccepted --no-color"

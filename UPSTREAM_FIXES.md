@@ -20,6 +20,26 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-28 (later 2) · bug · Grid-join `salt-call state.apply firewall` races with the 15-min highstate scheduler
+
+**Symptom.** After 830c2cd fix, grid-join's `salt-call state.apply
+firewall` step fails with:
+```
+Data failed to compile:
+  The function "state.highstate" is running as PID X and was
+  started at 2026, Jul 28 16:50:40 with jid ...
+```
+Salt's `maxrunning: 1` for the highstate schedule blocks concurrent
+state.apply. Highstates fire every 15 min and take ~5-8 min each →
+~30-50% chance our state.apply hits an in-flight highstate on any
+given run.
+
+**Fix.** Add `until: fw_apply.rc == 0; retries: 20; delay: 30` to the
+delegated task in both so_search and so_sensor. 10-min ceiling covers
+the worst-case wait for the highstate to release the lock.
+
+**Workaround.** None — attempted the fix directly.
+
 ## 2026-07-28 (later) · bug · Grid-join retry re-invokes 30-45 min of so-setup + so-firewall rejects idempotent re-add
 
 Two idempotency bugs surfaced on the FIRST fully-fresh site.yml deploy
