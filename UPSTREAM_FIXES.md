@@ -20,6 +20,50 @@ Format: `## YYYY-MM-DD · <severity> · <target>` followed by Symptom → Detect
 
 ---
 
+## 2026-07-28 · KNOWN BUG (DEFERRED) · Sensor's tun0 does not receive decapped GRE packets from the mirror
+
+**Symptom.** With the full stack running (11 sensor containers up,
+suricata loaded with 67K ETOPEN rules), suricata reports 0 packets
+captured on tun0. `tcpdump -i tun0` also sees 0 packets. Yet router-0
+is transmitting mirrored GRE packets (tun0 TX counter increments per
+ping), and `tcpdump -i eth1 -nn ip proto gre` on sensor captures the
+GRE packets cleanly (14 packets for 5-ping test).
+
+**Detection.** Sequence proved end-to-end:
+  1. router-0 tc filter shows `mirred (Egress Mirror to device tun0)` on eth0/eth1/eth2 — ✓
+  2. router-0 tun0 TX counter increments correctly per ping — ✓
+  3. Sensor eth1 tcpdump captures GRE encapsulated packets from router — ✓
+  4. Sensor tun0 kernel RX counter stays at 0 (or stops incrementing) — ✗
+  5. `IpInUnknownProtos` counter in nstat shows 588 accumulated — kernel is seeing GRE packets but not routing them to tun0
+  6. Suricata's AF_PACKET on tun0 sees 0 packets in stats.log
+
+Attempted fixes that did NOT resolve:
+  - `sysctl net.ipv4.conf.tun0.rp_filter=0`, `all.rp_filter=0`
+  - `net.ipv4.ip_forward=1`, `tun0.accept_local=1`, `tun0.forwarding=1`
+  - `ip link set tun0 down/up` bounce
+  - `iptables -F` flush (briefly worked once with 12 packets captured — non-reproducible)
+  - Recreated tun0 fresh via `ip tunnel del tun0 && ip tunnel add tun0 mode gre local ... remote ...`
+  - Added `iptables -t raw -I PREROUTING -i eth1 -p gre -j NOTRACK`
+
+Earlier in the same range (before the salt highstate re-pushed suricata
+config), tun0 was decapping correctly and captured 22-54 packets in
+similar tests. Something in the running state broke decap since.
+
+**Fix.** UNKNOWN. Deferred to a dedicated session.
+
+**Investigation avenues for next session:**
+  - `dropwatch -l kas` to identify the exact kernel drop point
+  - Compare `/proc/net/dev_snmp6` and `/proc/net/snmp` deltas around a ping
+  - Try `gretap` (L2 GRE) instead of `gre` (L3) — router-0 side needs matching change
+  - Check if `promiscuity: 15` on tun0 (very high) is masking multiple stale references
+  - Check for netns leaks — `ip netns ls` + `ss --netlink` to find sockets bound to tun0
+  - Bypass tun0 entirely — suricata binds directly to eth1 with a BPF filter on GRE-encapsulated payloads
+
+**Workaround (this deploy).** None. Suricata is running with rules
+loaded but sees no traffic — detection engine is effectively idle.
+Alerting/hunting from wire traffic will not fire until this is fixed.
+Splunk-based log detection (endpoint / DNS / etc.) remains unaffected.
+
 ## 2026-07-28 · gap · so-soc's suricataengine can't reach rules.emergingthreats.net from inside the container (no proxy env, embedded DNS misbehaves)
 
 **Symptom.** Sensor's suricata logs show
