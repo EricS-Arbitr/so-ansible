@@ -35,7 +35,7 @@ turn you change any entry's status.
 | Date | Item | Status |
 |---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
-| 2026-07-28 (later 8) | Master rejects regenerated minion key (stale key) | PROPOSED |
+| 2026-07-28 (later 8) | Master rejects regenerated minion key (Denied) | VERIFIED (diagnosis); role fix PROPOSED |
 | 2026-07-28 (later 8b) | Our guard probed `/etc/salt/minion_id`, which never exists | PROPOSED |
 | 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
 | 2026-07-28 (later 7) | `BNICS=tun0` ignored; so-setup binds bond0 | VERIFIED |
@@ -121,7 +121,38 @@ Whitelisting it as benign was considered and **rejected**: the minion was
 genuinely broken, so suppressing the error would have hidden a real
 failure. The guard behaved correctly.
 
-**Status.** PROPOSED — applied and committed, not yet exercised.
+**Status.** VERIFIED (diagnosis + manual fix) 2026-07-28. Running the fix
+by hand on the live range confirmed it exactly:
+```
+# salt-key -d so-sensor-1_sensor -y
+The following keys are going to be deleted:
+Denied Keys:
+so-sensor-1_sensor
+Unaccepted Keys:
+so-sensor-1_sensor
+Key for minion so-sensor-1_sensor deleted.
+[INFO    ] Rotating AES key
+```
+then after `systemctl restart salt-minion` on the sensor:
+```
+# salt-key --list=unaccepted --no-color
+Unaccepted Keys:
+so-sensor-1_sensor
+```
+
+**Refinement worth recording:** the key was in **`Denied`**, not merely
+stale-accepted. `Denied` is the state Salt uses when a minion presents a
+key that conflicts with one already on file for that id — the exact
+condition behind "The Salt Master has rejected this minion's public key".
+A plain `salt-key -a` would NOT have fixed this; the key had to be
+deleted first. Our fix uses `-d`, which is correct.
+
+The role-level fix is still PROPOSED — it has not yet run in a deploy,
+because on the current node `so_setup_can_skip` is now true (marker +
+/etc/salt/minion + unit all present), so both so-setup and the gated
+stale-key deletion are skipped. The role fix is what prevents recurrence
+on the next fresh build; the manual commands above are what cleared this
+particular node.
 
 ## 2026-07-28 (later 7) · gap · `BNICS` is NOT "the interface to monitor"; off-cloud installs hardcode `INTERFACE=bond0`
 
