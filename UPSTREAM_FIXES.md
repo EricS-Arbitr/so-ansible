@@ -48,6 +48,48 @@ turn you change any entry's status.
 
 ---
 
+## 2026-07-28 (later 8) · bug · salt-minion lands in `failed` state; `/etc/salt/minion_id` never written; so-setup flags `StreamClosedException`
+
+**Symptom.** so-setup runs to completion (reaches `Verifying setup`) and
+exits 0, but writes `/root/failure`. `/root/errors.log` contains only:
+```
+[ERROR   ] Encountered StreamClosedException
+```
+
+**Detection.** Deploy run 2026-07-28 ~22:53-22:55, so-sensor-1.
+
+**State of the node afterward:**
+  - `systemctl is-active salt-minion` → **`failed`** (rc=3)
+  - `/etc/salt/` contains `grains`, `minion`, `minion.d/`, `pki/`,
+    `minion.dpkg-dist` — but **no `minion_id`**, despite so-setup logging
+    `MINION_ID = so-sensor-1_sensor`
+  - Consequently no key is ever presented to the master, which is the
+    original grid-join symptom from (later 4)
+
+**The two exception hits are ONE error.** `grep -n StreamClosed
+/root/sosetup.log` returns lines 30 and 977:
+  - **Line 30** is the real occurrence, inside the *cleanup* phase —
+    right after `Old setup detected. Preparing for reinstallation.` /
+    `Putting system in state to run setup again` / `no crontab for root`,
+    during a `salt-call` applying `ca/remove.sls`. It is immediately
+    followed by `result: True`.
+  - **Line 977** is SO's end-of-run `--------- ERRORS ---------` summary
+    re-printing the same captured error.
+So the exception is an artifact of the **reinstall path** on a node that
+had a previous install, not a second independent failure.
+
+**Working hypothesis.** `StreamClosedException` during pre-clean is
+probably incidental; the actionable defect is salt-minion failing to
+start and `minion_id` never being written. Whitelisting the exception as
+benign was considered and **rejected** — the minion is genuinely broken,
+so suppressing the error would hide a real failure. The guard behaved
+correctly here.
+
+**Fix.** Not yet determined — need `journalctl -u salt-minion` plus the
+contents of `/etc/salt/minion` and `/etc/salt/minion.d/`.
+
+**Status.** OPEN — CURRENT BLOCKER.
+
 ## 2026-07-28 (later 7) · gap · `BNICS` is NOT "the interface to monitor"; off-cloud installs hardcode `INTERFACE=bond0`
 
 **Symptom.** Answer file sets `BNICS=tun0`, but so-setup logs
