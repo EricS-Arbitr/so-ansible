@@ -97,10 +97,23 @@ a harmless idempotent backstop.
   - `configure_network_sensor()` applies `ethernet.mtu 9000` to the
     `INTERFACE` connection. `tun0` is a GRE tunnel at mtu 1476, so NM may
     reject or warn on the MTU. Watch `/root/errors.log`.
-  - `is_cloud` may have meanings beyond the setup scripts (salt states,
-    pillar defaults) that our 5-file snapshot doesn't cover. Verify with
-    `grep -rn 'SOCLOUD\|is_cloud' /root/manager_setup/securityonion/salt/`
-    on a node before trusting this broadly.
+  - ~~`is_cloud` may have meanings beyond the setup scripts.~~ **CHECKED
+    2026-07-28 — blast radius confirmed narrow.** On so-sensor-1:
+    `grep -rn SOCLOUD /root/manager_setup/securityonion/salt/` → **no
+    hits**; nothing but `detect_cloud()` reads the file. `grep -rn
+    is_cloud .../salt/` → only `common/tools/sbin/so-common:67,89`, which
+    is the deployed copy of the same `add_interface_bond0()` we already
+    analyzed, plus an unrelated `app_is_cloud` ECS field in a Sophos
+    Elasticsearch template. No salt state, pillar, or runtime config
+    consumes `is_cloud`.
+  - **Remaining edge:** `is_cloud` is exported only during so-setup. If
+    any runtime tool calls `add_interface_bond0()` after install (a salt
+    state re-applying network config, `so-nsmnicconfig`, etc.) it will see
+    `is_cloud` unset, take the non-cloud branch, and try to enslave `tun0`
+    into `bond0` again. `/etc/SOCLOUD` does not help there, because only
+    `detect_cloud()` reads it and runtime tools don't call it. Confirm
+    with `grep -rn add_interface_bond0 /root/manager_setup/securityonion/salt/`
+    — if setup is the only caller, this is a non-issue.
 
 **Status.** PROPOSED — applied and committed, not yet exercised. Note this
 does NOT by itself fix the (later 6) NetworkManager `eth0` failure; that
