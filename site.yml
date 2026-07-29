@@ -15,6 +15,7 @@
 # Windows into scope (currently DEFERRED per project_so_architecture_decisions).
 # =========================================================================
 
+- import_playbook: playbooks/00-setup.yml
 - import_playbook: playbooks/10-mirror.yml
 - import_playbook: playbooks/20-vyos.yml
 - import_playbook: playbooks/30-prereqs.yml
