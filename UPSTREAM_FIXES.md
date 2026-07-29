@@ -61,6 +61,7 @@ turn you change any entry's status.
 | Date | Item | Status |
 |---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
+| 2026-07-29 (later 11) | 60-verify pinged gateway IPs — generated no mirrorable traffic | PROPOSED |
 | 2026-07-29 (later 10) | Injected rule concatenated; restore silently skipped | PROPOSED |
 | 2026-07-29 (later 9) | `end_host` probe makes installed nodes immune to new tasks | PROPOSED |
 | 2026-07-28 (later 8) | Master rejects regenerated minion key (Denied) | VERIFIED (diagnosis); role fix PROPOSED |
@@ -76,6 +77,48 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 11) · bug · 60-verify's traffic generator pinged the ROUTER's gateway IPs, which produces no mirrorable traffic at all
+
+**Symptom.** With the GRE firewall fix confirmed working (`ok=43`, the
+syntax check, proto-47 verify and report all passing), the phase-60 pcap
+check STILL reported `0 packets captured` on `tun0`.
+
+**Root cause — the test was wrong, not the system.** The generator did:
+```bash
+for gw in 172.16.8.1 172.16.6.1 172.16.7.1; do ping -c 6 ... "$gw" & done
+```
+Those are **router-0's own interface addresses**. A packet addressed to
+the router is *locally delivered* on the interface it arrives on (eth3,
+security) — it never egresses eth0/eth1/eth2, which is where the
+`tc filter ... action mirred egress mirror dev tun0` rules live. So the
+"traffic generator" generated exactly zero mirrorable packets.
+
+The task's own comment had the right principle — "what matters is router-0
+having outbound traffic on eth0/eth1/eth2 to mirror" — but the chosen
+targets defeated it, and the trailing note "Uses gateway .1 IPs (router
+itself) — always reachable" optimized for reachability over correctness.
+
+**Why this mattered so much.** This check has been failing since
+2026-07-27 and was read as evidence of a broken mirror. It **masked the
+real GRE firewall bug for several deploy cycles**, and even after that bug
+was found and fixed, it kept failing and looked like the fix hadn't
+worked. Two separate defects producing one identical symptom.
+
+**Fix.** Target host addresses ON the mirrored subnets instead, hoisted
+into a `so_verify_mirror_targets` play var:
+`172.16.8.5` (ops-wks-01), `172.16.6.11` (eng-wks-01), `172.16.7.7` (DC01).
+Unresponsive targets are fine — the router still ARPs out the mirrored
+interface, and ARP frames are mirrored too (confirmed: `gre-proto-0x806`
+observed encapsulated on the wire). Also raised the burst to
+`-c 10 -i 0.5` so it comfortably fills the 15s capture window.
+
+**Lesson.** A verification that can fail for reasons unrelated to what it
+claims to verify is worse than no verification — it actively misdirects.
+This one asserted "GRE mirror is delivering" while testing a path that
+never touched the mirror.
+
+**Status.** PROPOSED — not yet exercised.
 
 ## 2026-07-29 (later 10) · bug · Injected GRE rule concatenated onto the previous line; `iptables-restore` silently skipped
 

@@ -40,20 +40,36 @@
   hosts: so_sensor
   become: true
   gather_facts: false
+  vars:
+    # Targets MUST be host addresses ON the mirrored subnets — never
+    # router-0's own .1 gateway IPs. See the task comment below.
+    so_verify_mirror_targets:
+      - 172.16.8.5     # ops-wks-01  (Operations,  router eth0)
+      - 172.16.6.11    # eng-wks-01  (Engineering, router eth1)
+      - 172.16.7.7     # DC01        (Services,    router eth2)
   tasks:
-    # On an idle range (empty Ops/Eng/Services subnets) a 5-sec passive
-    # tcpdump reports 0 packets even though the GRE mirror is fully
-    # functional (verified 2026-07-27: 54 packets in 20s with generated
-    # ping traffic). Generate a burst of ICMP into each mirrored subnet
-    # from the manager in the background, then tcpdump in the foreground.
-    # 15-sec window captures the burst + any background traffic; the
-    # per-subnet ping runs even if the target is unresponsive, because
-    # what matters is router-0 having outbound traffic on eth0/eth1/eth2
-    # to mirror. Uses gateway .1 IPs (router itself) — always reachable.
+    # On an idle range (empty Ops/Eng/Services subnets) a passive tcpdump
+    # reports 0 packets even though the GRE mirror is fully functional.
+    # Generate a burst of ICMP into each mirrored subnet from the manager
+    # in the background, then tcpdump in the foreground.
+    #
+    # BUG FIXED 2026-07-29: this previously pinged the .1 GATEWAY IPs
+    # (172.16.8.1 etc.), which generates NO mirrorable traffic at all. Those
+    # are router-0's own addresses, so the packets are locally delivered on
+    # the interface they arrive on (eth3, security) and never egress
+    # eth0/eth1/eth2 — where the `tc ... action mirred egress mirror` rules
+    # live. The check therefore reported "0 packets captured" even with a
+    # perfectly working mirror, and masked the real GRE firewall bug for
+    # several deploy cycles.
+    #
+    # Targets must be addresses ON the mirrored subnets so the router has to
+    # forward OUT of the mirrored interface. Unresponsive targets are fine —
+    # the router still ARPs on that interface, and ARP frames are mirrored
+    # too (confirmed: `gre-proto-0x806` seen encapsulated on the wire).
     - name: Generate mirror-able traffic into Ops/Eng/Services subnets (background)
       ansible.builtin.shell: |
-        for gw in 172.16.8.1 172.16.6.1 172.16.7.1; do
-          ping -c 6 -W 1 -q -n "$gw" &
+        for tgt in {{ so_verify_mirror_targets | join(' ') }}; do
+          ping -c 10 -i 0.5 -W 1 -q -n "$tgt" &
         done
         wait
       delegate_to: "{{ groups['so_manager'][0] }}"
