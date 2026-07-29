@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (audit) | so_manager missing all 07-28 fixes; so-status rc-only; pillar no-op | PROPOSED |
 | 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
@@ -89,6 +90,86 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (audit) · assertion audit — "has this check ever actually fired?"
+
+Prompted by three same-shape bugs in one day — (later 11) a traffic
+generator that produced no mirrorable traffic, (later 12) 13 verify checks
+that were structurally incapable of passing, and (later 13) a security
+guard short-circuited to always-true. Swept every `failed_when`,
+`changed_when`, `until`, `fail:` and shell assertion in the repo asking
+one question: **has this check's failure path ever been exercised?**
+
+### HIGH — `so_manager` never received ANY of the 2026-07-28 fixes
+
+The three bugs found and fixed in `so_search` / `so_sensor` were never
+applied to `so_manager`. It still had, verbatim, the original design:
+  - **`creates: {{ so_manager_installed_marker }}`** on the so-setup shell
+    task — the self-blessing marker of (later 4). Both *dead* (the
+    `meta: end_host` probe already short-circuits on the same marker) and
+    *dangerous* (a satisfied `creates:` returns rc=0 with skipped=true, so
+    the rc check cannot tell success from skip).
+  - **rc-only trust** — no `/root/failure` check, despite (later 6)
+    proving so-setup logs "Errors detected during setup" and exits 0.
+  - **no positive proof of a Salt install.**
+
+It has only ever looked fine because the manager happened to succeed. A
+manager whose so-setup failed would mark itself installed and be
+unrepairable by redeploy — the exact state so-sensor-1 was found in.
+
+**Fixed:** removed `creates:`, added the `/root/failure` + `errors.log`
+check and the `/etc/salt/minion` positive-proof check, matching the other
+two roles.
+
+### MEDIUM — `so-status` verified by exit code alone (all three roles)
+
+`until: so_status.rc == 0` was the entire health assertion before writing
+the installed marker. After (later 6) we know an SO exit code is not
+evidence of success. `verify_so.sh` looks for the actual banner; the roles
+did not.
+
+**Fixed:** added an `assert` after the wait loop requiring
+`'adversaries cry' in so_status.stdout or 'STATUS: OK' in ...`. Kept
+outside the `until:` deliberately — a wording change should fail fast with
+a clear message, not hang for the full 20-minute retry ceiling first.
+
+### MEDIUM — sensor per-minion pillar `replace` is a silent no-op
+
+`replace:` with `regexp: "^(\s*interface:\s*)'bond0'"` matches
+`interface: 'bond0'` *with single quotes* specifically. If SO writes it
+unquoted, or writes something else, the task changes nothing and reports
+`ok`. Since the (later 7) SOCLOUD fix, so-setup writes `tun0` itself, so
+the replace legitimately does nothing — meaning "it reported ok" has
+proven nothing either way for some time.
+
+**Fixed:** added a task that greps the rendered pillar and fails unless
+`so_monitor_interface` is actually present. Verify the end state rather
+than trusting the transformation.
+
+### ACCEPTED (documented, not changed)
+
+  - **`failed_when: false` on `apt-get update`** (`so_base`,
+    `so_apt_mirror`). Deliberate — SimSpace images ship stale
+    puppet repos with expired keys. A total apt outage is invisible here,
+    but the following `apt: install` fails clearly, so the blind spot is
+    bounded.
+  - **`changed_when: fw_apply.rc == 0`** on the firewall applies. Always
+    true when the task succeeds, so every run reports `changed`. Cosmetic
+    noise, not a correctness issue.
+  - **Suricata check in `verify_so.sh`** uses `A || B && C`, which parses
+    as `(A || B) && C` — so `active-container` is echoed even when the
+    systemd unit is what matched. Misleading label, correct verdict.
+
+### Not found
+
+No other assertion in `roles/` or `playbooks/` was structurally incapable
+of firing. The `so-firewall` "already exists" and `so-minion` "does not
+match any unaccepted keys" `failed_when` lists are both correct, and both
+have been observed firing on real runs.
+
+**Status.** Fixes PROPOSED — YAML validated, not yet exercised on a
+deploy. `so_manager`'s new checks in particular are unexercised, and by
+the standard of this very audit that means unproven.
 
 ## 2026-07-29 (later 13) · bug · Vault path wrong in both helper scripts; deploy.sh's plaintext-vault guard had NEVER fired
 

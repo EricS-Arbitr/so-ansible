@@ -103,7 +103,13 @@
     ./so-setup {{ so_setup_type }} > {{ so_manager_setup_log }} 2>&1
   args:
     executable: /bin/bash
-    creates: "{{ so_manager_installed_marker }}"
+    # `creates:` deliberately REMOVED 2026-07-29. It was both dead and
+    # dangerous: dead because the `meta: end_host` probe at the top of this
+    # role already short-circuits on the same marker, and dangerous because
+    # a satisfied `creates:` makes the command module return rc=0 WITH
+    # skipped=true — so the rc check below cannot tell success from skip.
+    # See UPSTREAM_FIXES 2026-07-28 (later 4); so_search and so_sensor were
+    # fixed then, this role was missed.
   async: "{{ so_manager_install_timeout }}"
   poll: 0
   register: so_setup_async
@@ -129,6 +135,56 @@
       so-setup returned {{ so_setup_result.rc }}. Full log at
       {{ so_manager_setup_log }} on {{ inventory_hostname }}.
   when: so_setup_result.rc | default(1) != 0
+
+# so-setup's exit code is NOT trustworthy. Verified 2026-07-28 on the
+# sensor: it logged "WARNING: Errors detected during setup" with a fatal
+# error and still exited 0. SO writes its own signals instead — a
+# /root/failure marker and /root/errors.log. Check those; they are
+# authoritative where rc is not. (so_search and so_sensor got this on
+# 2026-07-28; this role was missed until the 2026-07-29 audit.)
+- name: Check SO's own failure marker
+  ansible.builtin.stat:
+    path: /root/failure
+  register: so_failure_marker
+
+- name: Read SO's errors.log (for the failure message)
+  ansible.builtin.slurp:
+    src: /root/errors.log
+  register: so_errors_log
+  failed_when: false
+
+- name: Fail if SO flagged its own setup as failed (rc lies; this does not)
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited {{ so_setup_result.rc | default('?') }} but SO wrote
+      its own failure marker at /root/failure on {{ inventory_hostname }}.
+      The exit code is not trustworthy — SO logs "Errors detected during
+      setup" and still returns 0.
+
+      /root/errors.log:
+      {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
+         else '<errors.log unreadable>' }}
+
+      Full setup log: {{ so_manager_setup_log }} (ours) and /root/sosetup.log
+      (SO's own, more detail).
+  when: so_failure_marker.stat.exists
+
+# Second net: confirm Salt actually landed. NOTE /etc/salt/minion_id is NOT
+# a valid probe — this SO version never writes it, setting `id:` inside
+# /etc/salt/minion instead (UPSTREAM_FIXES 2026-07-28 later 8b).
+- name: Confirm Salt was actually installed
+  ansible.builtin.stat:
+    path: /etc/salt/minion
+  register: salt_minion_after
+
+- name: Fail if so-setup exited 0 but never installed Salt
+  ansible.builtin.fail:
+    msg: |
+      so-setup exited 0 on {{ inventory_hostname }} but Salt was never
+      installed — /etc/salt/minion does not exist. The exit code lied.
+      Check {{ so_manager_setup_log }}; if that file is missing entirely,
+      so-setup never actually ran.
+  when: not salt_minion_after.stat.exists
 
 # so-setup itself does NOT write {{ so_manager_installed_marker }} on
 # successful completion (verified empirically 2026-07-23 — a completed
@@ -165,6 +221,18 @@
   retries: 60
   delay: 20
   until: so_status.rc == 0
+
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
 
 - name: Report manager status
   ansible.builtin.debug:

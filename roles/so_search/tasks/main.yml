@@ -351,6 +351,18 @@
   delay: 30
   until: so_status.rc == 0
 
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
+
 - name: Report search node status
   ansible.builtin.debug:
     msg: "{{ so_status.stdout_lines[-15:] }}"

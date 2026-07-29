@@ -491,6 +491,23 @@
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
 
+# The `replace` above is a SILENT NO-OP if the pattern misses — it matches
+# `interface: 'bond0'` with single quotes specifically. Since the (later 7)
+# SOCLOUD fix, so-setup writes tun0 itself and the replace legitimately
+# changes nothing, so "it reported ok" proves nothing either way. Verify
+# the end state instead of trusting the transformation.
+- name: Grid join — verify per-minion pillar carries the intended monitor interface
+  ansible.builtin.command: "grep -E '^[[:space:]]*interface:' /opt/so/saltstack/local/pillar/minions/{{ inventory_hostname }}_{{ so_role }}.sls"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: pillar_iface
+  changed_when: false
+  failed_when: so_monitor_interface not in pillar_iface.stdout
+
+- name: Grid join — report per-minion pillar interface
+  ansible.builtin.debug:
+    msg: "per-minion pillar interface: {{ pillar_iface.stdout | trim }}"
+
 - name: Grid join — kick highstate on this node (fire-and-forget; so-status wait below covers it)
   ansible.builtin.command: "sudo salt {{ inventory_hostname }}_{{ so_role }} state.highstate --async"
   delegate_to: "{{ groups['so_manager'][0] }}"
@@ -510,6 +527,18 @@
   retries: 40
   delay: 30
   until: so_status.rc == 0
+
+- name: Assert so-status actually reports a healthy grid (rc alone is not proof)
+  ansible.builtin.assert:
+    that:
+      - "'adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout"
+    fail_msg: |
+      so-status exited 0 on {{ inventory_hostname }} but did not report a
+      healthy grid. An exit code is not proof — so-setup already taught us
+      that (UPSTREAM_FIXES 2026-07-28 later 6). Last lines:
+      {{ so_status.stdout_lines[-15:] | join('\n') }}
+    success_msg: "so-status reports a healthy grid"
+    quiet: true
 
 - name: Report sensor status
   ansible.builtin.debug:
