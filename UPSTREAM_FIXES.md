@@ -27,6 +27,32 @@ Detection → Fix → Workaround → **Status**.
 - **OPEN** — root cause not yet determined, or deliberately deferred.
 - **SUPERSEDED** — replaced by a later entry; kept for history.
 
+### Status 2026-07-28 ~23:57 — PHASE 50 COMPLETE
+
+so-sensor-1 **joined the grid**. It cleared so-setup, stale-key deletion,
+salt-key acceptance, per-minion pillar generation and `so-status` verify.
+Entries (later 3) through (later 8) are all effectively closed on the
+live range.
+
+`site.yml` now reaches **phase 60 verify** and fails on exactly one
+check: the 15-second tcpdump on `tun0` returns `0 packets captured`. That
+is the (2026-07-28) tun0 decap bug — now the sole blocker.
+
+Note the earlier decap evidence must be **re-gathered, not trusted**: it
+was collected while Suricata was bound to a dead `bond0` and before
+`INTERFACE=tun0` reached the pillar. This failure is a raw `tcpdump` on
+`tun0` though, independent of Suricata, so the kernel-level symptom is
+confirmed to persist.
+
+**New suspect introduced by the (later 7) fix:** with `/etc/SOCLOUD` set,
+`configure_network_sensor()` now runs
+`nmcli con add ifname tun0 con-name tun0 type ethernet ipv4.method
+disabled ethernet.mtu 9000` against `tun0`. NetworkManager taking
+ownership of a GRE device — and trying to force MTU 9000 on a 1476-MTU
+tunnel — could plausibly disturb the tunnel's GRE parameters. Verify
+`ip -d link show tun0` still reports `gre remote 172.16.5.1 local
+172.16.5.20` before pursuing deeper kernel theories.
+
 ### Open / unverified items (the short list)
 
 Everything not listed here is VERIFIED. Update this table in the same
