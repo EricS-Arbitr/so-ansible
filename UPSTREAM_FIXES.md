@@ -60,6 +60,17 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
+| 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
+| 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
+| 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
+| 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
+
+**Everything else is VERIFIED.** Full stack green 2026-07-29:
+`Success on attempt 1`, zero failed tasks across ansible, router-0,
+so-manager, so-search and so-sensor-1.
+
+---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
 | 2026-07-29 (later 11) | 60-verify pinged gateway IPs — generated no mirrorable traffic | PROPOSED |
 | 2026-07-29 (later 10) | Injected rule concatenated; restore silently skipped | PROPOSED |
@@ -118,7 +129,10 @@ claims to verify is worse than no verification — it actively misdirects.
 This one asserted "GRE mirror is delivering" while testing a path that
 never touched the mirror.
 
-**Status.** PROPOSED — not yet exercised.
+**Status.** VERIFIED — deploy run 2026-07-29, `Success on attempt 1`.
+The pcap check passed with **48 packets captured** on `tun0`, including
+`ARP, Reply 172.16.6.11 is-at 00:50:56:a8:d9:b9` — proof the mirrored
+subnets are the ones being exercised.
 
 ## 2026-07-29 (later 10) · bug · Injected GRE rule concatenated onto the previous line; `iptables-restore` silently skipped
 
@@ -169,7 +183,9 @@ file_roots:
 ```
 The override mechanism was sound; only the injected text was wrong.
 
-**Status.** PROPOSED — not yet exercised.
+**Status.** VERIFIED — deploy run 2026-07-29. so-sensor-1 reached
+`ok=45 changed=3 failed=0`; the syntax check, the proto-47 verify and the
+pcap check all passed.
 
 ## 2026-07-29 (later 9) · bug · Role's `meta: end_host` idempotency probe makes an installed node unreachable by ANY new task
 
@@ -217,7 +233,9 @@ idempotency probe. Only the expensive one-time install work belongs after
 it. Worth auditing `so_search` and `so_manager` for tasks that are
 silently unreachable on installed nodes.
 
-**Status.** PROPOSED — not yet exercised.
+**Status.** VERIFIED — deploy run 2026-07-29. The GRE firewall tasks
+executed on an already-installed node (task count rose 36 → 45), which is
+exactly what the `end_host` move was for.
 
 ## 2026-07-28 (later 8) · bug · salt-minion lands in `failed` state; `/etc/salt/minion_id` never written; so-setup flags `StreamClosedException`
 
@@ -932,8 +950,10 @@ Design notes:
     re-runs every highstate (~15 min). That is why a manual `iptables -I`
     can never survive and the fix had to live in salt.
 
-**Status.** PROPOSED — implemented and committed, not yet exercised on a
-deploy.
+**Status.** VERIFIED — deploy run 2026-07-29. `iptables -S INPUT` carries
+the proto-47 ACCEPT, the rendered ruleset passes `iptables-restore --test`,
+and `tun0` captures traffic. The derived-override approach works: no
+vendored fork, and it re-derives from whatever SO currently ships.
 
 Structural notes for the fix:
   - The sensor has **no** `/opt/so/saltstack/` at all — rules are rendered
