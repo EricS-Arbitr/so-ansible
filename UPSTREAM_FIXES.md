@@ -69,7 +69,7 @@ turn you change any entry's status.
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
 | 2026-07-28 (later 4) | so-setup never ran on sensor; self-blessing marker | VERIFIED |
 | 2026-07-28 (later 3) | Grid-join `salt-key` hardcoded to wrong path | VERIFIED |
-| 2026-07-28 | Sensor `tun0` receives no decapped GRE packets | OPEN |
+| 2026-07-28 | Sensor `tun0` decap — root cause CONFIRMED (SO firewall drops GRE); durable fix pending | OPEN (fix design) |
 | 2026-07-28 | so-soc sigma rules + AI summaries still can't git-clone github.com | OPEN (sub-item) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
@@ -697,6 +697,29 @@ This explains every observation simultaneously:
 That was not a fluke, it was the answer. The two anchor observations were
 contradictory (a netfilter DROP and `IpInUnknownProtos` cannot both be
 true) — the counter reading was the wrong one.
+
+**CONFIRMED 2026-07-29 ~00:37 on the live range.** With a single
+temporary `iptables -I INPUT 1 -p gre -j ACCEPT`:
+  - `tun0` RX went **60 → 262 packets** (5910 → 20448 bytes) in a 15s window
+  - `tcpdump -i tun0` captured real mirrored traffic:
+    `IP 172.16.8.5 > 172.16.6.11: ICMP echo request`, and both directions
+    of pings the sensor itself generated out through the mirrored subnets
+  - The `LOGGING` chain is confirmed log-and-drop:
+    ```
+    Chain LOGGING (2 references)
+      37  3032 LOG   all -- ... limit: avg 2/min burst 5 ... "IPTables-dropped: "
+    7543  630K DROP  all -- 0.0.0.0/0  0.0.0.0/0
+    ```
+    7543 packets / 630K already dropped on that chain.
+
+The GRE mirror, the VyOS tc rules, the tunnel config and the kernel decap
+path were **all correct the entire time**. The only defect was SO's own
+host firewall dropping proto 47 in INPUT before protocol demux.
+
+Retired as never-relevant: the `promiscuity: 15` observation, the
+gretap-instead-of-gre idea, the `dropwatch` plan, the netns-leak theory,
+and every rp_filter/accept_local/ip_forward sysctl tried in the original
+session.
 
 **Fix direction.** The rule must go through SO's own firewall management,
 NOT raw `iptables`, or the next highstate will wipe it. SO rebuilds
