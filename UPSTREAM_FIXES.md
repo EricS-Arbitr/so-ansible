@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
 | 2026-07-29 (audit) | so_manager missing all 07-28 fixes; so-status rc-only; pillar no-op | PROPOSED |
 | 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
@@ -90,6 +91,63 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 14) · platform · SOC login loops on "This login form has expired" — Windows client clock 4h ahead (RTC-as-local-time)
+
+**Symptom.** `https://172.16.5.10/` renders the SOC login page with *"This
+login form has expired. Restart the login process to continue."* Clicking
+LOGIN mints a new flow and returns to the same message, forever. Identical
+in an InPrivate window.
+
+**Root cause — the CLIENT's clock, not the server's.** SOC's login page is
+a JS app; it fetches the flow by XHR (`sec-fetch-mode: cors`,
+`accept: application/json`) and compares `expires_at` against the
+**browser's** `Date.now()`. Measured:
+```
+so-manager   ~2026-07-29T16:24Z
+ops-wks-01    2026-07-29T20:24Z   (new Date().toISOString() in devtools)
+```
+4 hours ahead. Login flows have `lifespan: 60m`, so every flow the
+workstation fetches is already ~3 hours past expiry by its own reckoning.
+
+**The offset is diagnostic: exactly 4h = the EDT offset.** Not drift — an
+RTC interpretation mismatch. The platform's hardware clock holds UTC (the
+Linux hosts read it correctly; `timedatectl` shows `RTC in local TZ: no`),
+but **Windows treats the RTC as local time** by default, reads `16:24`,
+assumes Eastern, and computes UTC as `20:24`.
+
+**Fix (on the Windows client, as Administrator).** Either set the zone to
+UTC to match every Linux host in the range:
+```powershell
+tzutil /s "UTC"
+```
+or tell Windows the RTC is UTC and keep local display:
+```powershell
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation" /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
+```
+(reboot required for the registry route). No server-side change needed.
+
+**Wrong theories burned getting here, recorded so they aren't retried:**
+  1. *Server/container clock skew* — host and both containers identical;
+     all three SO nodes within 3s. I checked every machine except the one
+     actually doing the comparison.
+  2. *Cookie/base-URL mismatch from browsing by IP* — kratos is configured
+     for `https://172.16.5.10/` and nginx's `server_name` is the IP.
+     Browsing by IP is exactly what SO expects.
+  3. *Kratos flow lifespan zero/unset* — it is `60m`, and `secrets:` is
+     populated.
+  4. *Stale browser cookies* — InPrivate failed identically.
+
+**Wider gap this exposes.** **Nothing in this project configures time on
+any host.** The range has no reachable NTP (UDP/123 does not traverse the
+corp proxy — the manager reports `System clock synchronized: no` for the
+same reason). The Linux hosts happen to agree because they all read the
+same UTC RTC; the Windows placeholders do not. Worth adding an NTP/time
+task pointing at an in-range source — the manager is the natural
+candidate, being salt master already.
+
+**Status.** ROOT CAUSE CONFIRMED. Client-side fix; nothing to change in
+the roles. The time-configuration gap is logged as OPEN below.
 
 ## 2026-07-29 (audit) · assertion audit — "has this check ever actually fired?"
 
