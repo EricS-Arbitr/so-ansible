@@ -149,9 +149,17 @@ full, so the diagnostic value is kept without the false stop.
 brittle signal for another and would need extending every time SO adds a
 cleanup step.
 
-**Status.** PROPOSED — applied, needs the next fresh deploy to confirm the
-manager proceeds past it. Amends (later 6), whose VERIFIED status was
-correct for what it tested and wrong for the general case.
+**Status.** DIAGNOSIS VERIFIED 2026-07-29 — `so-status` on so-manager
+reports **14/14 containers running** and "This onion is ready to make your
+adversaries cry!" while `/root/failure` was present. so-setup had fully
+succeeded; the marker was pure false positive and this guard was the only
+thing failing the deploy. The code change still needs one run to confirm
+the deploy now proceeds to search + sensor.
+
+Amends (later 6), whose VERIFIED status was correct for what it tested and
+wrong for the general case. Note the container count also rose 13 → 14
+since 2026-07-23: `so-elastic-fleet` is now present, which is the service
+the cleanup-phase uninstall was failing to reach.
 
 ## 2026-07-29 (00-setup) · enhancement · New `playbooks/00-setup.yml` — inventory groups, roles and vars added to support it
 
