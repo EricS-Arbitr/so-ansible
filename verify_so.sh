@@ -57,7 +57,7 @@ n_hosts() {
 }
 
 probe_group() {
-  local group="$1" module="$2" cmd="$3" label="$4"
+  local group="$1" module="$2" cmd="$3" label="$4" extra="${5:-}"
   local total ok out
   total=$(n_hosts "$group")
   if [ "$total" -eq 0 ]; then
@@ -65,9 +65,11 @@ probe_group() {
     return
   fi
   if [ -n "$cmd" ]; then
-    out=$(A "$group" -m "$module" -a "$cmd" --one-line)
+    # shellcheck disable=SC2086  # $extra is intentionally word-split
+    out=$(A "$group" -m "$module" -a "$cmd" $extra --one-line)
   else
-    out=$(A "$group" -m "$module" --one-line)
+    # shellcheck disable=SC2086
+    out=$(A "$group" -m "$module" $extra --one-line)
   fi
   ok=$(echo "$out" | grep -cE '\| (SUCCESS|CHANGED)')
   if [ "$ok" -eq "$total" ]; then
@@ -79,9 +81,18 @@ probe_group() {
 
 check_sh() {
   local host="$1" cmd="$2" expect="$3" label="$4"
-  local out
-  out=$(A "$host" -m ansible.builtin.shell -a "$cmd" --one-line)
-  if echo "$out" | grep -qE "$expect"; then
+  local out body
+  out=$(A "$host" -m ansible.builtin.shell -a "$cmd")
+  # Strip ansible's "host | CHANGED | rc=0 >>" header so anchored patterns
+  # match the command's ACTUAL stdout.
+  #
+  # BUG FIXED 2026-07-29: this used --one-line, which prefixes the output
+  # with "host | CHANGED | rc=0 | (stdout) ..." on a single line. Every
+  # anchored expectation (^active$, ^(green|yellow)$, ^200$) was therefore
+  # impossible to satisfy, and 13/26 checks reported failure while showing
+  # perfectly correct data. A check that cannot pass is worse than no check.
+  body=$(printf '%s\n' "$out" | sed '1d')
+  if printf '%s\n' "$body" | grep -qE "$expect"; then
     pass "$label"
   else
     fail "$label" "$out"
@@ -94,7 +105,10 @@ check_sh() {
 section "1. Reachability (mgmt-plane ping)"
 
 probe_group ansible_controller ansible.builtin.ping ""                 "ansible controller"
-probe_group net_vyos           vyos.vyos.vyos_command "commands='show version'" "router-0 (VyOS)"
+# VyOS needs the network_cli connection for vyos_command. host_vars
+# deliberately does NOT pin ansible_connection (it would override play-level
+# settings in vyos_mirror), so ad-hoc runs must pass it explicitly.
+probe_group net_vyos           vyos.vyos.vyos_command "commands='show version'" "router-0 (VyOS)" "-c network_cli"
 probe_group so_all             ansible.builtin.ping ""                 "SO nodes"
 
 # =========================================================================
@@ -108,7 +122,7 @@ check_sh ansible \
   "ansible: nginx active"
 
 check_sh ansible \
-  "ls /var/www/so-mirror/so-source/*.tar.gz 2>&1 | head -1" \
+  "ls /var/www/so-mirror/so-source/securityonion-*.tar.gz 2>&1 | head -1" \
   "securityonion-.*\\.tar\\.gz" \
   "ansible: SO source tarball staged"
 
@@ -127,9 +141,15 @@ check_sh router-0 \
   "tun0.*UP" \
   "router-0: tun0 GRE tunnel UP"
 
-for iface in eth1 eth2 eth3; do
+# Mirrored interfaces are eth0/eth1/eth2 per host_vars/router-0.yml
+# (eth0=Operations, eth1=Engineering, eth2=Services). eth3 is the security
+# subnet and eth4 is mgmt — neither is mirrored. This loop previously
+# checked eth1/eth2/eth3, so it tested one interface that is deliberately
+# NOT mirrored and missed one that is. `tc` also is not on VyOS's
+# non-interactive PATH, hence the absolute path.
+for iface in eth0 eth1 eth2; do
   check_sh router-0 \
-    "tc filter show dev $iface ingress 2>&1 | head -5" \
+    "sudo /sbin/tc filter show dev $iface ingress 2>&1 | head -5" \
     "mirred" \
     "router-0: tc mirred rule on $iface (ingress)"
 done
@@ -146,7 +166,7 @@ check_sh so-manager \
 
 check_sh so-manager \
   "sudo so-status 2>&1 | tail -3" \
-  "STATUS: OK|so-.*OK" \
+  "adversaries cry|STATUS: OK" \
   "so-manager: so-status OK"
 
 check_sh so-manager \
@@ -156,11 +176,11 @@ check_sh so-manager \
 
 check_sh so-manager \
   "curl -kfsS -o /dev/null -w '%{http_code}' https://127.0.0.1/ 2>&1" \
-  "^200$|^302$" \
-  "so-manager: SOC WebUI :443 returns 200/302"
+  "^(200|302|307)$" \
+  "so-manager: SOC WebUI :443 returns 200/302/307"
 
 check_sh so-manager \
-  "sudo salt-key -L 2>&1 | grep -A20 'Accepted Keys' | head -6" \
+  "sudo salt-key -L 2>&1 | grep -A20 'Accepted Keys' | head -6 | tr '\\n' ' '" \
   "so-search.*so-sensor-1" \
   "so-manager: salt-key -L shows search + sensor accepted"
 
@@ -176,7 +196,7 @@ check_sh so-search \
 
 check_sh so-search \
   "sudo so-status 2>&1 | tail -3" \
-  "STATUS: OK|so-.*OK" \
+  "adversaries cry|STATUS: OK" \
   "so-search: so-status OK"
 
 check_sh so-search \
@@ -202,7 +222,7 @@ check_sh so-sensor-1 \
 
 check_sh so-sensor-1 \
   "sudo so-status 2>&1 | tail -3" \
-  "STATUS: OK|so-.*OK" \
+  "adversaries cry|STATUS: OK" \
   "so-sensor-1: so-status OK"
 
 check_sh so-sensor-1 \

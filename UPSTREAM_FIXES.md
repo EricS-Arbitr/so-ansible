@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (later 12) | verify_so.sh: 13 checks structurally could not pass | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
 | 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
@@ -88,6 +89,57 @@ so-manager, so-search and so-sensor-1.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 12) · bug · verify_so.sh reported 13/26 failures on a fully healthy stack — the checks could not pass
+
+**Symptom.** `./verify_so.sh -v` against the green stack: 13 pass, 13
+fail. But **every failing check displayed correct data** — `so-status`
+returning "ready to make your adversaries cry", cluster health `green`,
+`salt-minion` `active`, nginx `active`.
+
+**Root cause #1 — `--one-line` vs anchored patterns.** `check_sh` ran
+`ansible ... --one-line`, which collapses output to:
+```
+ansible | CHANGED | rc=0 | (stdout) active
+```
+then grepped it with anchored expectations like `^active$`,
+`^(green|yellow)$`, `^200$`. Those can never match a line beginning with
+`ansible | CHANGED`. **Structurally impossible to pass**, regardless of
+system health. Fixed by dropping `--one-line` and stripping ansible's
+header line before matching.
+
+**Five more real bugs found in the same pass:**
+  2. **`so-status` expectation was never right** — expects `STATUS: OK`;
+     SO actually prints `✔ This onion is ready to make your adversaries
+     cry!`. Now matches `adversaries cry|STATUS: OK`. (3 occurrences.)
+  3. **SOC WebUI expected 200/302** but 307 is the correct kratos redirect
+     — documented in the 2026-07-23 notes, never reflected in the check.
+  4. **Tarball glob** `ls .../*.tar.gz | head -1` returns
+     `emerging.rules.tar.gz` alphabetically, then expects
+     `securityonion-*`. Now globs `securityonion-*.tar.gz` directly.
+  5. **VyOS reachability** used `vyos_command` over the default ssh
+     connection → *"Connection type ssh is not valid for this module"*.
+     `probe_group` now takes extra args and passes `-c network_cli`.
+     host_vars deliberately does not pin `ansible_connection` (it would
+     override play-level settings in vyos_mirror), so ad-hoc must supply it.
+  6. **`tc` checks used the WRONG interfaces** — looped `eth1 eth2 eth3`,
+     but the mirrored set is `eth0 eth1 eth2` (eth3 is the security subnet,
+     eth4 is mgmt). It tested one interface that is deliberately not
+     mirrored and skipped one that is. Also `tc` is not on VyOS's
+     non-interactive PATH → now `sudo /sbin/tc`.
+  7. **salt-key check** matched `so-search.*so-sensor-1` across lines,
+     which only worked by accident under `--one-line`. Now pipes through
+     `tr '\n' ' '`.
+
+**Lesson (second time today).** This is the same failure mode as
+(later 11)'s traffic generator: a verification that cannot pass, or that
+fails for reasons unrelated to what it claims to verify. Both actively
+misdirected debugging. `verify_so.sh` had never been run against a fully
+healthy stack, so its expectations had never once been exercised against
+reality — they were written from assumption and inherited every wrong
+guess.
+
+**Status.** PROPOSED — fixes applied, not yet re-run.
 
 ## 2026-07-29 (later 11) · bug · 60-verify's traffic generator pinged the ROUTER's gateway IPs, which produces no mirrorable traffic at all
 
