@@ -13,6 +13,25 @@ so_sensor_setup_marker: "/opt/so/state/setup-completed"
 # Netplan drop-in path for our GRE tunnel.
 so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
 
+# --- GRE firewall override ------------------------------------------------
+# Anchor line in SO's firewall/iptables.jinja that our GRE ACCEPT is
+# inserted BEFORE. Must be the catch-all that ends the INPUT chain — our
+# rule has to precede it or the LOGGING chain drops the packet first.
+# Appears exactly once in the stock template (the DOCKER-USER LOGGING jump
+# is a different string, so this is unambiguous).
+so_gre_anchor: "-A INPUT -j LOGGING"
+
+# The block injected ahead of that anchor. Guarded on role so only sensors
+# accept GRE — the same template renders on manager and search nodes.
+# Source-restricted to the router's mirror endpoint rather than 0.0.0.0/0.
+#
+# NOTE the {% raw %} fencing: the `{%- if GLOBALS.role ... %}` is SALT's
+# Jinja and must reach the file as literal text. Without the fence Ansible
+# evaluates it at template time, GLOBALS is undefined here, and the task
+# fails (or worse, silently renders an empty guard). Only so_prod_gateway
+# is meant to be substituted by Ansible.
+so_gre_rule_block: "{% raw %}{%- if GLOBALS.role == 'so-sensor' %}{% endraw %}\n-A INPUT -s {{ so_prod_gateway }} -p gre -j ACCEPT\n{% raw %}{%- endif %}{% endraw %}\n"
+
 # Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
 # is the only path that honors BNICS as the monitor interface instead of
 # hardcoding INTERFACE=bond0. See the long comment in tasks/main.yml.

@@ -745,6 +745,52 @@ This is a real upstream gap, not a misconfiguration: SO supports
 GRE-mirror-fed sensors in principle, but its host firewall has no way to
 permit the tunnel that feeds them. **Good PR / SO-Slack candidate.**
 
+**FIX APPLIED 2026-07-29 — derived override, not a vendored fork.**
+
+`local/salt/firewall/iptables.jinja` overrides the stock template via
+file_roots precedence. Rather than committing a 5KB fork of SO's template
+into this repo (which would silently go stale on every SO upgrade), the
+role **derives** the override at deploy time:
+
+  1. `slurp` `/opt/so/saltstack/default/salt/firewall/iptables.jinja`
+     from the manager — whatever version SO currently ships.
+  2. Fail loudly if the anchor `-A INPUT -j LOGGING` is absent, i.e. SO
+     changed the template's shape and a human needs to re-derive it.
+  3. Write the stock content back to `local/salt/...` with one guarded
+     block injected immediately before that anchor:
+     ```jinja
+     {%- if GLOBALS.role == 'so-sensor' %}
+     -A INPUT -s <router ip> -p gre -j ACCEPT
+     {%- endif %}
+     ```
+  4. `salt-call state.apply firewall` on the sensor (with the same
+     20x30s highstate-collision retry as grid-join).
+  5. Verify with `iptables -S INPUT | grep -E '\-p (gre|47) '` and fail
+     if absent.
+
+Correct by construction on any SO version whose template still contains
+the anchor, and it degrades to a loud failure rather than a silent stale
+fork when that stops being true.
+
+Design notes:
+  - The rule is inside the same atomic `iptables-restore` as everything
+    else, so there is never a window where GRE is dropped.
+  - Guarded on `GLOBALS.role` because the same template renders on
+    manager and search nodes, which have no tunnel and should not accept
+    GRE. `GLOBALS.role` carries the full `so-<role>` form — matching
+    SO's own `GLOBALS.role in ['so-hypervisor', 'so-managerhype']` usage
+    in that file.
+  - Source-restricted to the router's mirror endpoint, not `0.0.0.0/0`.
+  - The injected block is `{% raw %}`-fenced in defaults so Ansible does
+    not evaluate SALT's Jinja at template time; only the gateway IP is
+    substituted Ansible-side.
+  - `iptables_restore` is a bare `cmd.run` with **no `onchanges`**, so it
+    re-runs every highstate (~15 min). That is why a manual `iptables -I`
+    can never survive and the fix had to live in salt.
+
+**Status.** PROPOSED — implemented and committed, not yet exercised on a
+deploy.
+
 Structural notes for the fix:
   - The sensor has **no** `/opt/so/saltstack/` at all — rules are rendered
     on the manager and pushed. Any overlay belongs in the manager's

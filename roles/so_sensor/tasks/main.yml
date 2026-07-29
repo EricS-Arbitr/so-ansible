@@ -417,6 +417,81 @@
     owner: root
     group: root
 
+# --- Permit GRE through SO's host firewall ------------------------------
+# SO's firewall DROPs the GRE mirror before it ever reaches the kernel's
+# tunnel decap. Verified 2026-07-29: every rule SO can generate carries a
+# mandatory `--dport` (firewall/iptables.jinja), and GRE is portless — so
+# there is NO hostgroup/portgroup/pillar combination that expresses proto
+# 47. SO hardcodes `-A INPUT -p icmp -j ACCEPT` for the one portless
+# protocol it supports, which confirms there's no general mechanism.
+# Unmatched traffic falls to the LOGGING chain, which is log-then-DROP.
+#
+# `iptables_restore` in firewall/init.sls is a bare cmd.run with no
+# `onchanges`, so it re-runs on EVERY highstate (~15 min) — a manually
+# added rule cannot survive. The fix has to live in salt.
+#
+# Salt file_roots put /opt/so/saltstack/local/salt AHEAD of default/salt,
+# so a file at local/salt/firewall/iptables.jinja overrides the stock
+# template. Rather than vendoring a 5KB fork into this repo (which would
+# silently go stale on SO upgrades), we DERIVE the override from whatever
+# SO currently ships and inject one guarded block. The result is correct
+# by construction on any SO version whose template still contains the
+# anchor line.
+#
+# Runs on the MANAGER: the sensor has no /opt/so/saltstack at all — rules
+# are rendered master-side and pushed.
+- name: GRE firewall — read SO's stock iptables template on the manager
+  ansible.builtin.slurp:
+    src: /opt/so/saltstack/default/salt/firewall/iptables.jinja
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_stock_ipt
+
+- name: GRE firewall — fail loudly if the anchor line is gone (SO upgraded)
+  ansible.builtin.fail:
+    msg: |
+      Cannot patch SO's firewall template: anchor '{{ so_gre_anchor }}' not
+      found in /opt/so/saltstack/default/salt/firewall/iptables.jinja.
+      SO's firewall template changed shape. Re-derive the override by hand
+      and update so_gre_anchor. Until then the GRE mirror will be dropped
+      and the sensor will capture nothing.
+  when: so_gre_anchor not in (so_stock_ipt.content | b64decode)
+
+- name: GRE firewall — write derived override into local/salt (takes precedence)
+  ansible.builtin.copy:
+    # Single-line form on purpose — a `|` block scalar would re-indent and
+    # newline-pad the rendered file.
+    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) }}"
+    dest: /opt/so/saltstack/local/salt/firewall/iptables.jinja
+    owner: socore
+    group: socore
+    mode: '0640'
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: so_gre_override
+
+- name: GRE firewall — apply firewall state on this sensor
+  ansible.builtin.command: "sudo salt-call state.apply firewall"
+  become: true
+  register: gre_fw_apply
+  changed_when: gre_fw_apply.rc == 0
+  # Same highstate-scheduler collision as the grid-join firewall apply.
+  until: gre_fw_apply.rc == 0
+  retries: 20
+  delay: 30
+
+- name: GRE firewall — verify proto 47 is now accepted in INPUT
+  ansible.builtin.shell: |
+    iptables -S INPUT | grep -E '\-p (gre|47) '
+  become: true
+  changed_when: false
+  register: gre_rule_check
+  failed_when: gre_rule_check.rc != 0
+
+- name: GRE firewall — report
+  ansible.builtin.debug:
+    msg: "GRE accepted in INPUT: {{ gre_rule_check.stdout_lines }}"
+
 # --- Traffic-flow smoke test -------------------------------------------
 
 - name: 5-sec tcpdump on {{ so_monitor_interface }} — packet count > 0 means GRE mirror delivering
