@@ -630,7 +630,51 @@ Earlier in the same range (before the salt highstate re-pushed suricata
 config), tun0 was decapping correctly and captured 22-54 packets in
 similar tests. Something in the running state broke decap since.
 
-**Fix.** UNKNOWN. Deferred to a dedicated session.
+**Fix.** UNKNOWN — but the search space narrowed sharply 2026-07-29.
+
+**Diagnostic round 2026-07-29 ~00:09 — two earlier "facts" are DEAD.**
+
+  1. ~~`IpInUnknownProtos` climbing (588 accumulated)~~ — **it is 0**,
+     both before and after a 25s capture window. `ip_gre`, `ip_tunnel`
+     and `gre` are all loaded. The kernel HAS a handler registered for
+     proto 47. The original reading came from a different machine state
+     and misdirected the entire first investigation.
+  2. ~~NetworkManager/the (later 7) SOCLOUD change disturbed the tunnel~~
+     — `nmcli dev status` reports `tun0  iptunnel  unmanaged`, and
+     `ip -d link show tun0` still reports `gre remote 172.16.5.1 local
+     172.16.5.20`, mtu 1476, UP, PROMISC. The tunnel is intact and NM
+     never took ownership.
+
+**What IS true:**
+  - `tcpdump -i eth1 proto gre` captures cleanly addressed packets:
+    `IP 172.16.5.1 > 172.16.5.20: GREv0, length 64: IP 172.16.8.5 >
+    172.16.6.11: ICMP echo request`. Outer src/dst match tun0's
+    remote/local exactly, and the inner payload decodes fine.
+  - Each mirrored packet arrives **twice** (router mirrors on both
+    ingress and egress interfaces) — cosmetic, not the bug.
+  - Some frames are `gre-proto-0x806` (ARP), so the router is mirroring
+    L2 frames, not just IPv4.
+  - `tun0` RX is **frozen at 60 packets / 5910 bytes**, identical before
+    and after the capture. Nothing arrives.
+  - A nonzero historical RX of 60 proves decap **did** work on this
+    device at some point — consistent with the original "worked earlier,
+    broke later" report.
+  - `iptables` INPUT policy is ACCEPT with no proto-47 rule. FORWARD is
+    DROP, but that is post-decap and cannot explain a frozen RX counter.
+  - `gre0` fallback exists but is DOWN.
+
+**Conclusion.** Handler registered + packets correctly addressed + no
+unknown-proto + RX not incrementing ⇒ the drop is inside `gre_rcv()` /
+`ip_tunnel_lookup()`, which is a silent path with no dedicated counter.
+
+**Leading hypothesis for next round: GRE checksum flag.** If VyOS sets
+the GRE checksum-present flag, the kernel validates it — and `tc mirred`
+mirroring bypasses checksum offload, so the mirrored copies can carry a
+stale/wrong checksum and be dropped silently in exactly this path.
+`tcpdump -nnvv` on eth1 shows the GRE header flags and will confirm or
+kill this immediately. Secondary candidates: an unexpected GRE key
+(lookup keys on it), or a `tc`/XDP ingress filter on eth1 consuming the
+packets before the IP stack.
 
 **Investigation avenues for next session:**
   - `dropwatch -l kas` to identify the exact kernel drop point
