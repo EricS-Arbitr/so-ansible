@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # vault-tools.sh — thin wrapper for the common ansible-vault operations
-# on group_vars/vault.yml. Reads the password from ~/.vault_pass by
+# on group_vars/all/vault.yml. Reads the password from ~/.vault_pass by
 # default (matches ansible.cfg's vault_password_file setting) or from
 # ./.vault_pass if that exists (useful for local dev on a Mac).
 #
@@ -15,7 +15,7 @@
 
 set -u
 
-VAULT_FILE="group_vars/vault.yml"
+VAULT_FILE="group_vars/all/vault.yml"
 
 # Prefer local ./.vault_pass (dev), fall back to controller-side path.
 if [ -f "./.vault_pass" ]; then

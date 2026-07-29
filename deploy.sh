@@ -22,12 +22,27 @@ export ANSIBLE_CACHE_PLUGIN_TIMEOUT=86400
 mkdir -p "$ANSIBLE_CACHE_PLUGIN_CONNECTION"
 
 # --- Vault encryption guard ------------------------------------------------
-# Refuse to deploy if group_vars/vault.yml is plaintext (either the operator
-# forgot to encrypt after editing, or checked out a fresh clone that hasn't
-# been through vault-tools.sh encrypt). The encrypted file starts with
-# `$ANSIBLE_VAULT;1.1;AES256`.
-if [ -f group_vars/vault.yml ] && ! head -1 group_vars/vault.yml | grep -q '^\$ANSIBLE_VAULT'; then
-	echo "ERROR: group_vars/vault.yml is plaintext. Refusing to deploy."
+# Refuse to deploy if the vault is plaintext (operator forgot to re-encrypt
+# after editing, or a fresh clone never went through vault-tools.sh encrypt).
+# An encrypted file starts with `$ANSIBLE_VAULT;1.1;AES256`.
+#
+# BUG FIXED 2026-07-29: this pointed at group_vars/vault.yml, but the vault
+# actually lives at group_vars/all/vault.yml. The `[ -f ... ] &&` made a
+# missing file short-circuit the whole test to false, so the guard passed
+# unconditionally and had NEVER fired since it was written. A plaintext
+# vault would have deployed silently — exactly what it exists to prevent.
+# A missing vault is now fatal rather than a silent pass.
+VAULT_FILE="group_vars/all/vault.yml"
+
+if [ ! -f "$VAULT_FILE" ]; then
+	echo "ERROR: $VAULT_FILE not found. Refusing to deploy."
+	echo "       The roles reference vault_* variables; deploying without it"
+	echo "       fails later and less clearly."
+	exit 1
+fi
+
+if ! head -1 "$VAULT_FILE" | grep -q '^\$ANSIBLE_VAULT'; then
+	echo "ERROR: $VAULT_FILE is plaintext. Refusing to deploy."
 	echo "       Encrypt first: ./vault-tools.sh encrypt"
 	exit 1
 fi

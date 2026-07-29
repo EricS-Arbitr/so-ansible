@@ -131,9 +131,9 @@ so-ansible/
 │                              # community.docker, ansible.windows
 ├── site.yml                   # imports 10→60 phase playbooks in order
 ├── group_vars/
-│   ├── all.yml                # SO version pin, mirror URL, subnets
-│   ├── so_all.yml             # answer-file variables (INTERWEBS, NIDS, ...)
-│   └── vault.yml              # WEBPASSWD, SOREMOTEPASS (ansible-vault encrypted)
+│   ├── all/main.yml           # SO version pin, mirror URL, subnets
+│   ├── all/vault.yml          # WEBPASSWD, SOREMOTEPASS (ansible-vault encrypted)
+│   └── so_all.yml             # answer-file variables (INTERWEBS, NIDS, ...)
 ├── host_vars/
 │   ├── so-manager.yml         # mgmt IP + prod IP + so_role: manager
 │   ├── so-search.yml          # mgmt IP + prod IP + so_role: searchnode
@@ -164,7 +164,7 @@ so-ansible/
 - **Log every workaround** in `UPSTREAM_FIXES.md` the same turn it lands
   (per `[[feedback_upstream_fixes_log]]`).
 - **No hardcoded secrets in tasks/templates.** All secrets via
-  `group_vars/vault.yml` (ansible-vault encrypted).
+  `group_vars/all/vault.yml` (ansible-vault encrypted).
 - **Never bypass so-setup by editing SO's own files** unless there's no
   alternative. If we do, document it in UPSTREAM_FIXES + open an issue
   in the SO repo.
@@ -175,7 +175,7 @@ so-ansible/
 
 ## 11. Vault + secrets workflow
 
-`group_vars/vault.yml` is ansible-vault encrypted. Password file location
+`group_vars/all/vault.yml` is ansible-vault encrypted. Password file location
 (matches `ansible.cfg`'s `vault_password_file` setting):
 - **Controller:** `/home/simspace/.vault_pass` (mode 600, contents = password)
 - **Local dev (Mac):** `./.vault_pass` in the repo root (gitignored)

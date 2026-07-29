@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
 | 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
@@ -88,6 +89,47 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 13) · bug · Vault path wrong in both helper scripts; deploy.sh's plaintext-vault guard had NEVER fired
+
+**Symptom.** `./vault-tools.sh view` fails:
+```
+ERROR! Unable to read source file (group_vars/vault.yml):
+[Errno 2] No such file or directory
+```
+
+**Root cause.** The vault lives at `group_vars/all/vault.yml` (it moved
+when `group_vars/all/` became a directory). Both helpers still pointed at
+`group_vars/vault.yml`.
+
+**The serious half — a security guard that was inert.** `deploy.sh` had:
+```bash
+if [ -f group_vars/vault.yml ] && ! head -1 group_vars/vault.yml | grep -q '^\$ANSIBLE_VAULT'; then
+```
+The `[ -f ... ] &&` means a **missing** file short-circuits the whole test
+to false. Since that path never existed, the guard evaluated false on
+every single deploy and **has never fired since it was written**. A
+plaintext vault would have deployed silently — precisely the thing it
+exists to prevent. It looked like protection and provided none.
+
+**Fix.**
+  - `vault-tools.sh`: `VAULT_FILE="group_vars/all/vault.yml"`.
+  - `deploy.sh`: same path, and split into two checks — a **missing** vault
+    is now fatal rather than a silent pass, and plaintext is fatal as
+    before. Fail-closed instead of fail-open.
+  - `CLAUDE.md`: corrected §7's repo-layout tree and §8/§11's references.
+  - `PROJECT_LOG.md` left alone — its mentions are historical entries
+    describing what was true at the time.
+
+**Lesson — third instance today of the same shape.** After (later 11)'s
+traffic generator and (later 12)'s verify script, this is another check
+that could not fail: a `&&` short-circuit made the guard unconditionally
+true. **A guard whose failure path has never been exercised is not a
+guard.** Worth a deliberate pass over the remaining assertions in this
+repo asking "has this ever actually fired?"
+
+**Status.** PROPOSED — `bash -n` clean on both scripts; the corrected
+`vault-tools.sh view` path needs confirming on the controller.
 
 ## 2026-07-29 (later 12) · bug · verify_so.sh reported 13/26 failures on a fully healthy stack — the checks could not pass
 
