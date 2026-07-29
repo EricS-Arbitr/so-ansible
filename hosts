@@ -39,12 +39,37 @@ so_search
 so_sensor
 
 # ------------------------------------------------------------
-# Placeholder Windows targets — NOT provisioned by this project (per
-# project_so_architecture_decisions memory, decision #3: Windows out of
-# scope). Included here so the elastic_agent role has enrollment targets
-# once we're ready to demo endpoint telemetry.
+# Windows targets. Renamed from `windows_placeholder` 2026-07-29 when
+# playbooks/00-setup.yml was added — that playbook targets `windows`
+# directly (init role + adapter rename + common role), so these hosts are
+# now provisioned, not merely listed. This widens architecture decision #3
+# ("Windows out of scope"): baseline setup is now IN scope; AD promotion,
+# user creation and domain join remain OUT.
+#
+# NIC mapping after 00-setup's rename play: Ethernet0 = mgmt
+# (10.255.240.0/20, position FIRST in the blueprint), Ethernet1 = prod.
 # ------------------------------------------------------------
-[windows_placeholder]
+[windows]
 DC01
 ops-wks-01
 eng-wks-01
+
+# ------------------------------------------------------------
+# Linux hosts that 00-setup.yml's `common` role + NetworkManager
+# pre-config apply to. Deliberately NOT everything Linux in this file:
+#
+#   - `ansible` (the controller) is EXCLUDED. It runs with
+#     ansible_connection=local, and common performs a systemd-networkd →
+#     NetworkManager cutover plus a netplan overwrite and reboot. Doing
+#     that to the box executing the play would sever the run mid-flight.
+#   - `router-0` is EXCLUDED. It is VyOS — the play's apt + NetworkManager
+#     tasks would fail outright.
+#
+# That leaves the three SO nodes, which is what the NM pre-config play in
+# 00-setup was written for (it names eth0/eth1 and netplan's
+# renderer:NetworkManager stub explicitly).
+# ------------------------------------------------------------
+[linux]
+so-manager
+so-search
+so-sensor-1

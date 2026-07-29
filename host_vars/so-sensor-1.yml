@@ -26,3 +26,27 @@ so_gre_tunnel_local: "10.100.0.2"
 so_gre_tunnel_remote: "10.100.0.1"
 so_gre_tunnel_prefix: 30
 so_monitor_interface: "tun0"
+
+# --- network_interfaces for the `common` role (00-setup.yml) --------------
+# Added 2026-07-29. Schema is fixed by common/tasks/linux.yml, which feeds
+# it to community.general.nmcli — note the Linux form REQUIRES ipv4.type
+# (the Windows form in host_vars/*wks*.yml does not).
+#
+# Values mirror the so_prod_* / mgmt facts already defined above; they are
+# duplicated rather than referenced because `common` is a copied upstream
+# role and keeping its input literal makes a bad render obvious on sight.
+network_interfaces:
+  - name: "eth0"                   # mgmt — position FIRST in the blueprint
+    ipv4:
+      type: "ethernet"
+      address: "10.255.240.102"
+      netmask: "255.255.240.0"
+      gateway: ""                  # mgmt plane is gateway-less in-scenario
+  - name: "eth1"                   # production — security 172.16.5.0/24
+    ipv4:
+      type: "ethernet"
+      address: "172.16.5.20"
+      netmask: "255.255.255.0"
+      gateway: "172.16.5.1"
+    dns:
+      - "10.255.240.157"                    # ansible controller (also the SO mirror)

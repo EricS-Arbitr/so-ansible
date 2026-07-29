@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (00-setup) | New playbook: groups/roles/vars added; re-run hazard on live range | PROPOSED |
 | 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
 | 2026-07-29 (audit) | so_manager missing all 07-28 fixes; so-status rc-only; pillar no-op | PROPOSED |
 | 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
@@ -91,6 +92,82 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (00-setup) · enhancement · New `playbooks/00-setup.yml` — inventory groups, roles and vars added to support it
+
+`playbooks/00-setup.yml` (authored by Eric) targets `hosts: windows` and
+`hosts: linux` and consumes the `init` and `common` roles. **None of those
+four things existed in this repo.** Added:
+
+### Inventory (`hosts`)
+  - `[windows]` — DC01, ops-wks-01, eng-wks-01. Renamed from
+    `windows_placeholder`; nothing referenced the old name.
+  - `[linux]` — the three SO nodes ONLY. `ansible` (the controller) is
+    excluded because it runs `ansible_connection=local` and `common`
+    performs a networkd→NM cutover, netplan overwrite and reboot — doing
+    that to the box executing the play would sever the run. `router-0` is
+    excluded because it is VyOS and the apt/NM tasks would fail outright.
+
+### Roles copied from `airfield-range/roles/` (per the COPY policy)
+  - `common`, `init`, and — easy to miss — **`handlers`**, which is a hard
+    dependency: `common/meta/main.yml` declares it and
+    `common/tasks/windows.yml` notifies `Reboot Windows`. Copying common
+    alone fails at role load.
+
+### Variables
+  - `network_interfaces` for all six managed hosts. **The Linux and Windows
+    forms differ**: `common/tasks/linux.yml` feeds
+    `community.general.nmcli` and REQUIRES `ipv4.type: "ethernet"`;
+    `windows.yml` uses `win_dsc` and has no such key. Values taken from
+    `blueprints/so_arbitr_dev.yml`, where every host has
+    `managementInterface: position: FIRST` — so NIC 0 is mgmt
+    (`eth0`/`Ethernet0`) and NIC 1 is production.
+  - `group_vars/windows.yml` — winrm/ntlm/5985 connection settings, which
+    did not exist at all; any play against those hosts would previously
+    have failed at the transport layer.
+  - `dns` omitted for Windows on purpose (common guards on
+    `when: item.dns is defined`, and there is no AD DNS here); set to the
+    controller for Linux, matching the existing `so_prod_dns`.
+  - `domain_name` deliberately left undefined — see group_vars/windows.yml.
+
+### `requirements.yml`
+  - **`community.windows`** — `win_psmodule`, `win_power_plan`. Without it
+    `common` fails on its first Windows task.
+  - **`ansible.netcommon`** — the `ipaddr` filter both `common` task files
+    use to derive a prefix from `ipv4.netmask`.
+
+### ⚠ RE-RUN HAZARD — read before running site.yml on a live range
+
+`common/tasks/linux.yml` stops `systemd-networkd`, cuts over to
+NetworkManager, **overwrites `/etc/netplan/99-netcfg-vmware.yaml`, and
+reboots when that file changes**. This is the exact behaviour that got
+these roles rejected on 2026-07-21.
+
+Ordering is safe on a FRESH build: `00-setup` runs first in site.yml,
+before `so_base` writes its netplan drop-ins and before `so_sensor`
+creates the GRE tunnel. Our drop-ins are separately-numbered files
+(`60-so-mirror-tun.yaml`), so netplan merges rather than clobbers them.
+
+It is NOT obviously safe to re-run against the **currently deployed,
+working** range: `common` would redo the NM cutover and potentially reboot
+all three SO nodes, and the stack we just got green depends on `tun0`
+surviving. Recommend one of:
+  1. run 00-setup only on fresh builds (`--skip-tags common,init`
+     otherwise), or
+  2. add an idempotency marker to `common` the way `so_base` uses one, or
+  3. drop the SO nodes from `[linux]` and let 00-setup manage Windows only.
+Not chosen here — it is a scope call for the owner.
+
+### Also worth noting
+Windows moving into scope means the **client-clock problem from
+(later 14) is now fixable in-repo** — a `common`-adjacent task setting
+`RealTimeIsUniversal` / the timezone on the Windows hosts would prevent
+the SOC login loop from recurring on every fresh range. Not added unasked.
+
+**Status.** PROPOSED — YAML validated, group membership cross-checked
+against host_vars, not yet run. `vault_simspace_password` is referenced by
+group_vars/windows.yml and must be confirmed to decrypt to the long
+`Simspace1!Simspace1!` form (the SO nodes use a different, shorter secret).
 
 ## 2026-07-29 (later 14) · platform · SOC login loops on "This login form has expired" — Windows client clock 4h ahead (RTC-as-local-time)
 

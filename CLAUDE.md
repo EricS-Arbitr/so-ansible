@@ -63,14 +63,25 @@ dual-homed with `.165` on mgmt plane. VyOS ansible target uses
 
 ## 5. Roles (copied vs authored)
 
-**Copied** (per role-sourcing policy): none currently. Attempted 2026-07-21
-to copy `common`, `init`, `handlers` from airfield-range — all three
-proved unusable (common expects a `network_interfaces` dict schema we
-don't use + does NM/netplan surgery that conflicts with `so-setup
-network`; init is Windows-only). See UPSTREAM_FIXES.md · 2026-07-21
-(later) entry. If we later need hostname/NM/apt tasks, pull the
-narrowest possible sub-task into a purpose-built role rather than
-importing wholesale.
+**Copied** (per role-sourcing policy), all from `airfield-range/roles/`
+on 2026-07-29 to support `playbooks/00-setup.yml`:
+- `common` — hostname, /etc/hosts, NM connections from `network_interfaces`,
+  netplan cutover (Linux); hostname, IP/gw/DNS via win_dsc, power plan,
+  IPv6 disable (Windows)
+- `init` — Windows `wait_for_connection` + `win_ping`. Takes no variables.
+- `handlers` — **mandatory**: `common/meta/main.yml` declares
+  `dependencies: [handlers]`, and `common/tasks/windows.yml` notifies
+  `Reboot Windows`. Copying common without it fails at role load.
+
+**This REVERSES the 2026-07-21 decision** recorded in UPSTREAM_FIXES.md ·
+2026-07-21 (later), which rejected these three roles because `common`
+expects a `network_interfaces` schema we did not define and performs
+NM/netplan surgery that conflicts with `so-setup network`. The schema half
+is resolved — `network_interfaces` is now defined in host_vars for all six
+managed hosts. **The NM/netplan conflict is NOT resolved**, only sequenced
+around: `00-setup` runs first in site.yml, before `so_base` writes its
+netplan drop-ins and before `so_sensor` creates the GRE tunnel. See
+UPSTREAM_FIXES.md · 2026-07-29 (00-setup) for the re-run hazard.
 
 **TECH DEBT — planned adoption of `airfield-range/roles/platform_proxy`**
 (logged 2026-07-22). Sibling repo audit surfaced that
@@ -146,7 +157,9 @@ so-ansible/
 │   ├── 40-manager.yml         # so_manager (must succeed before 50)
 │   ├── 50-nodes.yml           # so_search + so_sensor (parallel, join manager)
 │   └── 60-verify.yml          # so-status + cluster health + pcap flow check
-├── roles/                     # (initially empty except copied common/init/hostname)
+├── roles/                     # copied: common, init, handlers
+│                              # authored: so_apt_mirror, so_base, so_manager,
+│                              #           so_search, so_sensor, vyos_mirror
 ├── blueprints/
 │   └── so_arbitr_dev.yml      # authoritative range topology
 ├── docs/

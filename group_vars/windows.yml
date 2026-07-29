@@ -1,0 +1,45 @@
+---
+# =========================================================================
+# group_vars/windows.yml — connection settings for the Windows hosts
+# =========================================================================
+# Added 2026-07-29 alongside playbooks/00-setup.yml, which targets
+# `hosts: windows` (init role, adapter rename, common role). Before that
+# these hosts were inventory-only placeholders with no connection vars, so
+# any play against them would have failed at the transport layer.
+#
+# Pattern mirrors airfield-range/group_vars/windows.yml, which is the
+# proven-working configuration against the same SimSpace Windows images.
+# =========================================================================
+
+ansible_connection: winrm
+ansible_winrm_transport: ntlm
+ansible_port: 5985
+ansible_user: simspace
+
+# SimSpace Windows images use the LONGER password form
+# (Simspace1!Simspace1!), unlike the SO Ubuntu Desktop images which use the
+# shorter "simspace1" — see group_vars/so_all.yml and commit 32f5911. Those
+# are two different secrets; do not collapse them into one variable.
+#
+# VERIFY on first run: confirm `vault_simspace_password` decrypts to the
+# long form. If the vault only carries the SO-specific short form, add a
+# distinct key rather than reusing vault_so_simspace_password here.
+ansible_password: "{{ vault_simspace_password }}"
+
+# pywinrm defaults (operation=20, read=30) are too tight for win_dsc, which
+# is what common/tasks/windows.yml uses for IP/gateway/DNS configuration —
+# DSC resource compilation regularly exceeds 20s on first run. read must
+# exceed operation per pywinrm's own validation. Values in seconds.
+ansible_winrm_operation_timeout_sec: 45
+ansible_winrm_read_timeout_sec: 60
+
+# Self-signed / absent certs on range images — HTTP on 5985 with NTLM is
+# what the platform ships. Set explicitly so a future switch to 5986 is a
+# deliberate edit rather than an accident.
+ansible_winrm_server_cert_validation: ignore
+
+# NOTE: `domain_name` is intentionally NOT set. common/tasks/windows.yml
+# guards its DNS-suffix task with `when: domain_name is defined`, and this
+# range has no AD domain (DC01 is present but never promoted — decision #3).
+# Defining it would point the search suffix at a domain that does not
+# resolve. Set it here if and when AD comes into scope.

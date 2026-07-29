@@ -21,7 +21,21 @@ collections:
   - name: community.docker
     version: ">=3.4.0"
 
-  # ansible.windows: for Elastic Agent enrollment on DC01 + workstations
-  # (elastic_agent role, when we add Windows targets to scope).
+  # ansible.windows: win_powershell (00-setup adapter rename), win_hostname,
+  # win_dsc (common role IP/gateway/DNS config), win_reboot (handlers role).
   - name: ansible.windows
     version: ">=2.2.0"
+
+  # community.windows: REQUIRED by the copied `common` role's Windows path —
+  # win_psmodule (xNetworking DSC) and win_power_plan. Added 2026-07-29 with
+  # playbooks/00-setup.yml; without it the common role fails on the first
+  # Windows task with "couldn't resolve module/action".
+  - name: community.windows
+    version: ">=2.0.0"
+
+  # ansible.netcommon: provides the `ipaddr` filter that common/tasks/
+  # {linux,windows}.yml use to derive a prefix from ipv4.netmask
+  # ("{{ (addr ~ '/' ~ netmask) | ipaddr('prefix') }}"). Also the transport
+  # for vyos.vyos network_cli. Added 2026-07-29 alongside 00-setup.yml.
+  - name: ansible.netcommon
+    version: ">=5.0.0"
