@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (fresh-range) | `/root/failure` guard false-positived every fresh deploy | PROPOSED |
 | 2026-07-29 (00-setup) | New playbook: groups/roles/vars added; re-run hazard on live range | PROPOSED |
 | 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
 | 2026-07-29 (audit) | so_manager missing all 07-28 fixes; so-status rc-only; pillar no-op | PROPOSED |
@@ -92,6 +93,65 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (fresh-range) · bug · MY `/root/failure` guard false-positives on EVERY fresh deploy — elastic-agent uninstall noise
+
+**Symptom.** First fresh-range build. so-setup on the manager ran its full
+~45 min, returned rc=0, and then the (later 6) guard hard-failed the deploy:
+```
+so-setup exited 0 but SO wrote its own failure marker at /root/failure
+```
+`so-manager: ok=72 changed=10 failed=1`.
+
+**What errors.log actually contained** — not a setup failure at all:
+```
+Stopping service → Successfully uninstalled service → Removing install directory
+Attempting to notify Fleet of uninstall
+notify Fleet: ... dial tcp 172.16.5.10:8220: connect: no route to host
+notify Fleet: failed
+Done
+```
+That is the **elastic-agent uninstaller**, running inside so-setup's
+"Old setup detected. Preparing for reinstallation." cleanup phase. It tries
+to notify the Fleet server that it is unenrolling; Fleet lives in a manager
+container that is not up during a reinstall, so it cannot connect, retries,
+and gives up. Harmless.
+
+**Why it hits every fresh node.** The SimSpace `RDP_Ubuntu_Desktop` image
+**pre-bakes SO remnants** (documented 2026-07-22 — a legacy 2.3.300 install
+at `/root/manager_setup/`). So so-setup always takes its reinstall path on a
+"fresh" node, always runs the elastic-agent uninstall, and always logs that
+failure. SO captures it, writes `/root/failure`, and then completes
+successfully. **The guard would therefore break every single fresh deploy.**
+
+**This is a regression I introduced**, not a problem with `00-setup.yml`,
+which Eric reasonably suspected because it was the new thing. (later 6)
+made `/root/failure` authoritative on the strength of one observation on
+the sensor; its failure path had never run on a manager or on a genuinely
+fresh node. **Exactly the flaw the 2026-07-29 audit warned about — a guard
+whose failure path has never been exercised is not a guard.** Mine took
+one day to prove the point against itself.
+
+**Fix.** Demote `/root/failure` from fatal to a loud warning in all three
+roles, and let *outcome* checks be the hard gates. Each role still fails on:
+  - SO source missing before setup
+  - `so-setup` rc != 0
+  - `/etc/salt/minion` absent after setup (positive proof of install)
+  - `so-status` not reaching rc=0 within the retry ceiling
+  - the `so-status` health-banner assert (added in the audit)
+
+An outcome check cannot false-positive on cleanup noise, which is the whole
+reason to prefer it. `/root/failure` and `errors.log` are still printed in
+full, so the diagnostic value is kept without the false stop.
+
+**Rejected alternative:** whitelisting known-benign patterns
+(`notify Fleet`, `StreamClosedException`) in errors.log. That trades one
+brittle signal for another and would need extending every time SO adds a
+cleanup step.
+
+**Status.** PROPOSED — applied, needs the next fresh deploy to confirm the
+manager proceeds past it. Amends (later 6), whose VERIFIED status was
+correct for what it tested and wrong for the general case.
 
 ## 2026-07-29 (00-setup) · enhancement · New `playbooks/00-setup.yml` — inventory groups, roles and vars added to support it
 

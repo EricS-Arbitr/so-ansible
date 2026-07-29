@@ -153,23 +153,35 @@
   register: so_errors_log
   failed_when: false
 
-- name: Fail if SO flagged its own setup as failed (rc lies; this does not)
-  ansible.builtin.fail:
+# /root/failure is NOT sufficient on its own to fail the deploy. Learned
+# 2026-07-29 on the first fresh-range build: the SimSpace Ubuntu image
+# pre-bakes SO remnants, so so-setup ALWAYS takes its "Old setup detected"
+# reinstall path, and that path's elastic-agent uninstall tries to notify a
+# Fleet server that is not running yet:
+#   notify Fleet: ... dial tcp 172.16.5.10:8220: connect: no route to host
+#   notify Fleet: failed
+# SO captures that into errors.log and writes /root/failure — then setup
+# completes successfully anyway. Failing hard here would break EVERY fresh
+# deploy on this image.
+#
+# So: surface it loudly as a warning, and let the positive-proof checks
+# below (Salt installed) plus the so-status gate further down be the hard
+# failures. An outcome check cannot false-positive on cleanup noise.
+- name: Report SO's failure marker + errors.log (warning, not fatal)
+  ansible.builtin.debug:
     msg: |
-      so-setup exited {{ so_setup_result.rc | default('?') }} but SO wrote
-      its own failure marker at /root/failure on {{ inventory_hostname }}.
-      The exit code is not trustworthy — SO logs "Errors detected during
-      setup" and still returns 0.
+      NOTE: SO wrote /root/failure on {{ inventory_hostname }} (so-setup
+      still exited {{ so_setup_result.rc | default('?') }}). This is often
+      benign on this image — the reinstall cleanup path logs an
+      elastic-agent "notify Fleet: failed" because Fleet is not up yet.
+      Judge success by the Salt + so-status checks that follow, not by this.
 
       /root/errors.log:
       {{ (so_errors_log.content | b64decode) if so_errors_log.content is defined
          else '<errors.log unreadable>' }}
-
-      Full setup log: {{ so_manager_setup_log }} (ours) and /root/sosetup.log
-      (SO's own, more detail).
   when: so_failure_marker.stat.exists
 
-# Second net: confirm Salt actually landed. NOTE /etc/salt/minion_id is NOT
+# Second net — and now the FIRST hard gate. NOTE /etc/salt/minion_id is NOT
 # a valid probe — this SO version never writes it, setting `id:` inside
 # /etc/salt/minion instead (UPSTREAM_FIXES 2026-07-28 later 8b).
 - name: Confirm Salt was actually installed
