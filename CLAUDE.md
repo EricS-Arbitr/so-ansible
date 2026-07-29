@@ -6,6 +6,12 @@ project; roles port into airfield-range + PowerPlant once proven.
 Authority order for design decisions: **owner decisions (§3) → SO source of
 truth (§6) → CLAUDE.md → per-role README**.
 
+> **Deploying this into a DIFFERENT range?** Read
+> [`docs/PORTING_GUIDE.md`](docs/PORTING_GUIDE.md) first. It carries the
+> topology contract, the full variable contract, and §9 — the sixteen
+> failure modes that will silently break a new range. This file covers the
+> dev range's decisions; the porting guide covers making it work elsewhere.
+
 ---
 
 ## 1. Project purpose
