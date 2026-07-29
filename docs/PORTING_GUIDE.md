@@ -43,7 +43,7 @@ Work top to bottom. Each step has a section below.
 4. [ ] Update **group_vars/all/main.yml** subnets, manager IP, proxy, mirror (§5)
 5. [ ] Populate the **vault** (§5.4)
 6. [ ] Confirm **collections** install (§6)
-7. [ ] Recreate `/home/simspace/.vault_pass` on the controller — **it does not persist between range spin-ups**
+7. [ ] Recreate `/home/simspace/.vault_pass` on the controller, contents `simspace1` — **it does not persist between range spin-ups**
 8. [ ] `./build_tarball.sh`, commit, push — the controller deploys from the tarball, not a git pull
 9. [ ] `sudo ./deploy.sh`
 10. [ ] `sudo ./verify_so.sh -v` — expect 26/26
@@ -248,6 +248,12 @@ in `so_allow_subnets` and in the manager answer file's `ALLOW_CIDR`.
 two variables distinct; collapsing them breaks one platform or the other.
 
 Manage with `./vault-tools.sh {view,edit,rekey,check}`.
+
+**Dev vault password: `simspace1`** (rekeyed 2026-07-29). The password file
+lives at `/home/simspace/.vault_pass` on the controller and `./.vault_pass`
+locally; both are gitignored. It does **not** survive a range spin-up —
+recreating it is checklist step 7, and forgetting it is the single most
+common first-deploy failure. Rotate before any customer range.
 
 ### 5.6 Fixed — do not change when porting
 

@@ -113,7 +113,8 @@ Simplest path; abandons decision #4's local mirror plan.
   search (data node in Elastic), sensor (tun0 UP + promisc + Suricata +
   Zeek + tcpdump-on-tun0 smoke test).
 - **Vault workflow** set up: encrypted `group_vars/vault.yml` with
-  ansible-vault (dev password: `so-ansible-dev`; distributed out-of-band
+  ansible-vault (dev password at the time: `so-ansible-dev` — REKEYED to
+  `simspace1` on 2026-07-29; distributed out-of-band
   for real deploys). `.vault_pass` at repo root (gitignored) or
   `/home/simspace/.vault_pass` on the controller. Helper script
   `vault-tools.sh` wraps common ops (edit/view/encrypt/decrypt/rekey/check).

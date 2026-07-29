@@ -199,9 +199,22 @@ so-ansible/
 - **Controller:** `/home/simspace/.vault_pass` (mode 600, contents = password)
 - **Local dev (Mac):** `./.vault_pass` in the repo root (gitignored)
 
-**Password distribution.** The dev vault password is distributed out-of-band
-(Slack DM / 1Password / similar). NOT committed anywhere in this repo.
-Rotate the password before any customer-range deploy.
+**Current dev vault password: `simspace1`** — rekeyed 2026-07-29 from the
+earlier `so-ansible-dev`. It now matches the SO Ubuntu nodes' SSH password
+form, so there is one fewer distinct secret to carry across range spin-ups.
+
+This is a DEV password for lab ranges only. **Rotate before any
+customer-range deploy** with `./vault-tools.sh rekey`, and distribute the
+new value out-of-band (Slack DM / 1Password / similar).
+
+Recreate the password file on a freshly provisioned controller — it does
+NOT persist between spin-ups:
+
+```bash
+sudo bash -c 'echo -n "simspace1" > /home/simspace/.vault_pass'
+sudo chown simspace:simspace /home/simspace/.vault_pass
+sudo chmod 600 /home/simspace/.vault_pass
+```
 
 **Common operations** (via `vault-tools.sh`):
 ```bash
