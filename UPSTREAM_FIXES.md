@@ -60,7 +60,6 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-29 (later 12) | verify_so.sh: 13 checks structurally could not pass | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
 | 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
@@ -68,8 +67,8 @@ turn you change any entry's status.
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
 
 **Everything else is VERIFIED.** Full stack green 2026-07-29:
-`Success on attempt 1`, zero failed tasks across ansible, router-0,
-so-manager, so-search and so-sensor-1.
+`site.yml` reports `Success on attempt 1` with zero failed tasks, and
+`verify_so.sh` reports **26/26 pass, 0 fail** across all six sections.
 
 ---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
@@ -139,7 +138,10 @@ healthy stack, so its expectations had never once been exercised against
 reality — they were written from assumption and inherited every wrong
 guess.
 
-**Status.** PROPOSED — fixes applied, not yet re-run.
+**Status.** VERIFIED — re-run 2026-07-29: **26/26 pass, 0 fail**, "All
+checks passed." Every section green including the three `tc mirred` rules
+on the correct interfaces (eth0/eth1/eth2) and `tun0` receiving mirrored
+packets.
 
 ## 2026-07-29 (later 11) · bug · 60-verify's traffic generator pinged the ROUTER's gateway IPs, which produces no mirrorable traffic at all
 
