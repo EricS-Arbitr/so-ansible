@@ -667,7 +667,45 @@ similar tests. Something in the running state broke decap since.
 unknown-proto + RX not incrementing ⇒ the drop is inside `gre_rcv()` /
 `ip_tunnel_lookup()`, which is a silent path with no dedicated counter.
 
-**Leading hypothesis for next round: GRE checksum flag.** If VyOS sets
+**ROOT CAUSE (high confidence, 2026-07-29 ~00:19): SO's own host
+firewall drops GRE in INPUT, before protocol demux.**
+
+The checksum/key theory is dead — `tcpdump -nnvv` shows `GREv0, Flags
+[none]`: no checksum, no key, no sequence. `gre0` RX is 0, `tc filter
+show dev eth1 ingress` is empty, `rp_filter` is 2 (loose) and post-decap
+anyway.
+
+The answer is in the INPUT chain. The GRE packets match none of
+so-firewall's rules (not `tcp dpt:22`, not the `172.17.1.0/24` docker
+rules, not `icmp`) and fall through to the catch-all last line:
+```
+91  8290 LOGGING  all  --  *  *  0.0.0.0/0  0.0.0.0/0
+```
+SO's `LOGGING` chain terminates in DROP. **For a locally-destined packet
+the INPUT filter runs BEFORE protocol demux**, so the GRE packets are
+dropped before `ip_gre` ever sees them.
+
+This explains every observation simultaneously:
+  - `tun0` RX frozen — packets never reach the tunnel
+  - `IpInUnknownProtos` = 0 — never reached protocol demux at all
+  - `gre0` RX = 0 — same reason
+  - "worked earlier, broke later" — GRE flowed until so-firewall's rules
+    landed via highstate
+
+**It also vindicates a clue dismissed in the original report:** *"iptables
+-F flush briefly worked once with 12 packets captured — non-reproducible."*
+That was not a fluke, it was the answer. The two anchor observations were
+contradictory (a netfilter DROP and `IpInUnknownProtos` cannot both be
+true) — the counter reading was the wrong one.
+
+**Fix direction.** The rule must go through SO's own firewall management,
+NOT raw `iptables`, or the next highstate will wipe it. SO rebuilds
+iptables from salt state on every highstate (every 15 min). Needs
+investigation of SO's firewall pillar structure — `so-firewall`'s CLI is
+hostgroup/portgroup oriented and may not express a proto-47 rule
+directly.
+
+~~**Leading hypothesis for next round: GRE checksum flag.**~~ DEAD — If VyOS sets
 the GRE checksum-present flag, the kernel validates it — and `tc mirred`
 mirroring bypasses checksum offload, so the mirrored copies can carry a
 stale/wrong checksum and be dropped silently in exactly this path.
