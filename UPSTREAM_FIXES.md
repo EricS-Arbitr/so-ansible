@@ -721,12 +721,43 @@ gretap-instead-of-gre idea, the `dropwatch` plan, the netns-leak theory,
 and every rp_filter/accept_local/ip_forward sysctl tried in the original
 session.
 
-**Fix direction.** The rule must go through SO's own firewall management,
-NOT raw `iptables`, or the next highstate will wipe it. SO rebuilds
-iptables from salt state on every highstate (every 15 min). Needs
-investigation of SO's firewall pillar structure — `so-firewall`'s CLI is
-hostgroup/portgroup oriented and may not express a proto-47 rule
-directly.
+**Fix direction — SO's firewall model CANNOT express GRE (confirmed
+2026-07-29).** Read `/opt/so/saltstack/default/salt/firewall/iptables.jinja`
+on the manager. The single rule-generating loop is:
+```jinja
+{%- for proto, ports in FIREWALL_MERGED['portgroups'][groupname].items() %}
+{%-   for port in ports %}
+-A {{chn}} -s {{ip}} -p {{proto}} -m {{proto}} --dport {{port}} -j ACCEPT
+```
+**Every generatable rule carries a mandatory `--dport`.** GRE is portless,
+so no portgroup value yields a valid rule, and an empty `ports` list emits
+nothing at all. Attempting `-p gre --dport N` would produce invalid
+iptables syntax and fail the whole `iptables-restore`, which would leave
+the host firewall in a broken state — do NOT try it.
+
+Corroborating: SO hardcodes `-A INPUT -p icmp -j ACCEPT` for the one
+portless protocol it supports, proving there is no general mechanism.
+`/opt/so/saltstack/local/pillar/firewall/adv_firewall.sls` exists but is
+**empty**, and feeds the same `FIREWALL_MERGED` structure, so it cannot
+express GRE either.
+
+This is a real upstream gap, not a misconfiguration: SO supports
+GRE-mirror-fed sensors in principle, but its host firewall has no way to
+permit the tunnel that feeds them. **Good PR / SO-Slack candidate.**
+
+Structural notes for the fix:
+  - The sensor has **no** `/opt/so/saltstack/` at all — rules are rendered
+    on the manager and pushed. Any overlay belongs in the manager's
+    `local/` tree.
+  - Salt file_roots precedence is `/opt/so/saltstack/local/salt` **before**
+    `/opt/so/saltstack/default/salt`, so a file placed at
+    `local/salt/firewall/iptables.jinja` overrides the default one.
+  - Overriding the template puts our rule inside the same atomic
+    `iptables-restore`, so there is never a window where GRE is dropped —
+    unlike a separate state that runs after the firewall state.
+  - Cost of that approach: we fork a ~5KB template and must re-diff it on
+    every SO upgrade (same discipline already used for the so-setup
+    snapshot).
 
 ~~**Leading hypothesis for next round: GRE checksum flag.**~~ DEAD — If VyOS sets
 the GRE checksum-present flag, the kernel validates it — and `tc mirred`
