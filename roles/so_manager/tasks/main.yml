@@ -5,6 +5,15 @@
 
 # --- Idempotency: skip everything if SO is already installed -------------
 
+# Lifetime invariant — MUST come before the `meta: end_host` probe below.
+# SO's highstate rewrites soc.json, so this needs re-applying on every run,
+# including against an already-installed manager. Anything placed after
+# end_host can never reach an installed node (UPSTREAM_FIXES §9.4 — this is
+# the fourth place that pattern has bitten). Guarded on soc.json existing,
+# so it is a clean no-op on a fresh host.
+- name: SOC ETOPEN — point the detections engine at our mirror (pre-probe)
+  ansible.builtin.include_tasks: soc_etopen.yml
+
 - name: Idempotency probe — has so-setup already completed on this host?
   ansible.builtin.stat:
     path: "{{ so_manager_installed_marker }}"
@@ -328,25 +337,7 @@
     group: root
 
 # --- SOC detections engine — point ETOPEN at local mirror ---------------
-# so-soc's suricataengine tries to fetch ETOPEN from
-# https://rules.emergingthreats.net but the container can't reach it —
-# no proxy env vars, and docker's embedded DNS (127.0.0.11) doesn't
-# resolve external hosts. Verified 2026-07-28: 'failed to sync
-# ruleset ... server misbehaving'. Fix: swap the sourcePath in
-# /opt/so/conf/soc/soc.json to our local mirror URL. The rules tarball
-# is served by so_apt_mirror from /so-source/ on the ansible controller;
-# from-container fetches to the mirror IP work because docker uses SNAT
-# to the host's default route + the URL uses a direct IP (no external
-# DNS lookup). Idempotent: the replace only fires if the upstream URL is
-# still there.
-- name: Point soc.json ETOPEN sourcePath + urlHash at local mirror
-  ansible.builtin.replace:
-    path: /opt/so/conf/soc/soc.json
-    regexp: "https://rules\\.emergingthreats\\.net/open/suricata-7\\.0\\.3/emerging\\.rules\\.tar\\.gz(\\.md5)?"
-    replace: "{{ so_mirror_url }}/so-source/{{ so_bundled_rules_filename }}\\1"
-  register: soc_json_patch
-
-- name: Restart so-soc to pick up new ETOPEN sourcePath
-  ansible.builtin.command: docker restart so-soc
-  when: soc_json_patch.changed
-  changed_when: soc_json_patch.changed
+# Fresh-install pass: soc.json does not exist until so-setup has run, so the
+# copy included at the top of this role was a no-op. Run it again now.
+- name: SOC ETOPEN — point the detections engine at our mirror (post-install)
+  ansible.builtin.include_tasks: soc_etopen.yml

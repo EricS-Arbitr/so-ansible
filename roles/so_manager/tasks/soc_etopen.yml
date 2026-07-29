@@ -1,0 +1,45 @@
+---
+# =========================================================================
+# soc_etopen.yml — point SOC's ETOPEN ruleset at our local mirror
+# =========================================================================
+# so-soc's suricataengine tries to fetch ETOPEN from
+# https://rules.emergingthreats.net but the container cannot reach it — no
+# proxy env vars, and docker's embedded DNS (127.0.0.11) does not resolve
+# external hosts. Verified 2026-07-28: "failed to sync ruleset ... server
+# misbehaving". Fix: swap the sourcePath in /opt/so/conf/soc/soc.json to our
+# mirror URL. The tarball is served by so_apt_mirror from /so-source/ on the
+# controller; from-container fetches to the mirror IP work because docker
+# SNATs to the host's default route and the URL is a direct IP (no external
+# DNS lookup needed).
+#
+# Factored into its own file 2026-07-29 so it can be included TWICE:
+#   1. near the top of so_manager, BEFORE the `meta: end_host` probe, so an
+#      already-installed manager still gets patched — SO's highstate
+#      rewrites soc.json, so this is a lifetime invariant, not install-time
+#      work (UPSTREAM_FIXES §9.4 pattern);
+#   2. at the end of the role, for a fresh install where soc.json does not
+#      exist until so-setup has run.
+# Both are safe: the stat guard skips when the file is absent, `replace`
+# only changes anything when the upstream URL is still present, and the
+# restart is gated on that change.
+# =========================================================================
+
+- name: SOC ETOPEN — does soc.json exist yet?
+  ansible.builtin.stat:
+    path: /opt/so/conf/soc/soc.json
+  register: soc_json_stat
+
+- name: SOC ETOPEN — point sourcePath + urlHash at the local mirror
+  ansible.builtin.replace:
+    path: /opt/so/conf/soc/soc.json
+    regexp: "https://rules\\.emergingthreats\\.net/open/suricata-7\\.0\\.3/emerging\\.rules\\.tar\\.gz(\\.md5)?"
+    replace: "{{ so_mirror_url }}/so-source/{{ so_bundled_rules_filename }}\\1"
+  register: soc_json_patch
+  when: soc_json_stat.stat.exists
+
+- name: SOC ETOPEN — restart so-soc to pick up the new sourcePath
+  ansible.builtin.command: docker restart so-soc
+  when:
+    - soc_json_stat.stat.exists
+    - soc_json_patch.changed
+  changed_when: soc_json_patch.changed

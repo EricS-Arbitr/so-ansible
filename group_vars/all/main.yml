@@ -51,6 +51,17 @@ so_mirror_port: 80
 so_mirror_url: "http://{{ so_mirror_host }}:{{ so_mirror_port }}"
 so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz"
 
+# Filename of the bundled ETOPEN rules tarball as served from /so-source/.
+# MUST live here, not in a role's defaults: it is consumed by BOTH
+# so_apt_mirror (which publishes the file, on the controller) and so_manager
+# (which patches soc.json to point at it, on the manager). Role defaults are
+# role-scoped, so a definition inside so_apt_mirror is invisible to
+# so_manager — those roles run in different plays against different hosts.
+# That is exactly how this broke on 2026-07-29: the soc.json task failed
+# with "'so_bundled_rules_filename' is undefined" the first time it ever
+# reached a fresh manager.
+so_bundled_rules_filename: "emerging.rules.tar.gz"
+
 # --- Network layout (dev range) ---
 so_subnet_security: "172.16.5.0/24"
 so_subnet_operations: "172.16.8.0/24"

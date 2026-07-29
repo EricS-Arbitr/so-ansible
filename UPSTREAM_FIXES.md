@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (fresh-range 3) | `so_bundled_rules_filename` scope + soc.json unreachable after end_host | PROPOSED |
 | 2026-07-29 (fresh-range 2) | so_manager had no skip logic; reinstalled a healthy manager | PROPOSED |
 | 2026-07-29 (fresh-range) | `/root/failure` guard false-positived every fresh deploy | PROPOSED |
 | 2026-07-29 (00-setup) | New playbook: groups/roles/vars added; re-run hazard on live range | PROPOSED |
@@ -94,6 +95,59 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (fresh-range 3) · bug · `so_bundled_rules_filename` undefined in so_manager — role defaults are role-scoped
+
+**Symptom.** The manager reached `so-status` green (14 containers, banner
+present), wrote its markers, and then died on the last task:
+```
+'so_bundled_rules_filename' is undefined
+```
+
+**Cause.** The variable was declared in
+`roles/so_apt_mirror/defaults/main.yml`. **Role defaults are role-scoped** —
+they are visible to the role that owns them and to later roles in the *same
+play*, not across plays. `so_apt_mirror` runs in `10-mirror.yml` against the
+controller; `so_manager` runs in `40-manager.yml` against the manager.
+Different play, different host, so the variable was never in scope.
+
+**Why it took until now to surface.** The soc.json patch was added
+2026-07-27, and until this run it had **never actually executed**. On the
+previous range the manager's `installed` marker already existed, so
+`meta: end_host` skipped the whole role; on the earlier fresh-range attempt
+the role died before reaching it. Its first real execution was its first
+failure — a task that had been "working" for two days purely by never
+running.
+
+**Fix.** Moved `so_bundled_rules_filename` to `group_vars/all/main.yml`,
+which both roles can see, and left a pointer comment in `so_apt_mirror`'s
+defaults rather than a duplicate definition.
+
+### Second bug found in the same task — it could never re-run
+
+The soc.json patch sat AFTER the `meta: end_host` probe, so an
+already-installed manager could never receive it. **SO's highstate rewrites
+`soc.json`**, which makes this a lifetime invariant, not install-time work.
+This is the **fourth** occurrence of the §9.4 pattern.
+
+Fix: extracted the block into `roles/so_manager/tasks/soc_etopen.yml` and
+included it twice —
+  1. **before** the idempotency probe, so installed managers get patched;
+  2. at the end of the role, because on a fresh host `soc.json` does not
+     exist until so-setup has run and the first include is a no-op.
+Both are safe: a `stat` guard skips when the file is absent, `replace` only
+changes anything while the upstream URL is still present, and the so-soc
+restart is gated on that change.
+
+**Lesson.** Two distinct "never exercised" failures in one task: a variable
+that was only ever referenced from a code path that never ran, and a task
+placed where it could only ever run once. Neither is visible to YAML
+validation or to the assertion audit — both need the question *"has this
+line ever actually executed?"*
+
+**Status.** PROPOSED. Note the manager DID write both markers on this run,
+so the next run will skip its install and reach the pre-probe soc.json
+include in seconds.
 
 ## 2026-07-29 (fresh-range 2) · bug · `so_manager` had NO skip logic — a healthy 14-container manager was reinstalled from scratch
 
