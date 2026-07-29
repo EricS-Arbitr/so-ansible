@@ -60,6 +60,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-29 (fresh-range 2) | so_manager had no skip logic; reinstalled a healthy manager | PROPOSED |
 | 2026-07-29 (fresh-range) | `/root/failure` guard false-positived every fresh deploy | PROPOSED |
 | 2026-07-29 (00-setup) | New playbook: groups/roles/vars added; re-run hazard on live range | PROPOSED |
 | 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
@@ -93,6 +94,61 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (fresh-range 2) · bug · `so_manager` had NO skip logic — a healthy 14-container manager was reinstalled from scratch
+
+**Symptom.** On the re-run after the `/root/failure` fix, `so-setup` fired
+again on the manager and sat in `Poll so-setup completion` for 45 minutes.
+`so-status` from a second terminal showed the grid healthy but with
+**container uptimes reset** — 51/45/42 min before, 28/22/7 min after. It had
+torn down a working manager and rebuilt it.
+
+**Root cause — two-marker split never applied to so_manager.**
+`so_search` and `so_sensor` have had, since 2026-07-28, a `setup-completed`
+marker plus a positive-proof skip decision. `so_manager` had neither:
+  - its only marker was `installed`, written near the END of the role;
+  - `meta: end_host` at the top gated on that one marker;
+  - the so-setup task had no skip condition at all — the 2026-07-29 audit
+    removed its `creates:` (correctly, it was unsafe) but never replaced it.
+
+So the window between "so-setup finished" and "installed marker written"
+was the whole rest of the role. The previous run died inside that window on
+the then-fatal `/root/failure` guard, leaving no record so-setup had ever
+succeeded. The next run's `end_host` didn't fire, and so-setup ran again.
+
+**Also found while fixing it:** `so_manager` wrote its `installed` marker
+**before** the so-status verify and even before the post-install reboot. A
+manager that finished so-setup but never brought its containers up would
+have been marked installed and skipped on every subsequent run — the
+self-blessing pattern again, in a third location. `so_search`/`so_sensor`
+have always written theirs post-verify.
+
+**Fix.**
+  1. Added `so_manager_setup_marker` (`/opt/so/state/setup-completed`) and
+     the same three-condition skip as the other roles: marker exists AND
+     `/etc/salt/minion` exists AND `salt-minion.service` is a known unit.
+  2. Gated so-setup, its poll, the rc check, the failure-marker/errors.log
+     reporting, the Salt confirmation and the marker write on
+     `not so_setup_can_skip`.
+  3. Gated the **reboot** too — it exists only to complete the reboot
+     so-setup deferred via `SKIP_REBOOT=1`. Nothing is deferred when
+     so-setup was skipped, and rebooting a healthy 14-container manager to
+     re-verify it is gratuitous.
+  4. **Moved the `installed` marker to after the so-status assert.**
+  5. Added a skip-decision debug line, matching the other roles.
+
+Net effect: a failure anywhere downstream of so-setup now costs a
+re-verify, not a 45-90 minute reinstall.
+
+**Pattern count.** This is the **fourth** instance of a marker/guard
+mis-scoped in this repo, and the second found by fresh-range testing rather
+than by the audit that was supposed to catch exactly this. The audit
+checked whether assertions *could fire*; it did not check whether
+*expensive work was correctly gated*. Worth remembering as a distinct
+question to ask.
+
+**Status.** PROPOSED — applied, needs a re-run to confirm the manager
+reports `so-setup SKIPPED` instead of reinstalling.
 
 ## 2026-07-29 (fresh-range) · bug · MY `/root/failure` guard false-positives on EVERY fresh deploy — elastic-agent uninstall noise
 
