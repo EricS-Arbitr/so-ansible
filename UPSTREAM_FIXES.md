@@ -61,6 +61,7 @@ turn you change any entry's status.
 | Date | Item | Status |
 |---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
+| 2026-07-29 (later 9) | `end_host` probe makes installed nodes immune to new tasks | PROPOSED |
 | 2026-07-28 (later 8) | Master rejects regenerated minion key (Denied) | VERIFIED (diagnosis); role fix PROPOSED |
 | 2026-07-28 (later 8b) | Our guard probed `/etc/salt/minion_id`, which never exists | PROPOSED |
 | 2026-07-28 (later 6) | so-setup exits 0 on failure; use /root/failure | PROPOSED (guard) |
@@ -74,6 +75,54 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 9) · bug · Role's `meta: end_host` idempotency probe makes an installed node unreachable by ANY new task
+
+**Symptom.** The GRE firewall fix was committed, deployed, and silently
+did nothing. so-sensor-1 showed `ok=36 changed=0` — the exact same task
+count as the run before the fix existed — and the pcap check still
+reported `0 packets captured`.
+
+**Root cause.** `so_sensor/tasks/main.yml` opens with:
+```yaml
+- name: Idempotency probe
+  ansible.builtin.stat:
+    path: "{{ so_sensor_installed_marker }}"
+  register: so_installed
+
+- name: End play early if SO is already installed
+  ansible.builtin.meta: end_host
+  when: so_installed.stat.exists
+```
+`/opt/so/state/installed` exists once a node has completed successfully,
+so the role ends the host immediately. **Any task appended to the role
+can never reach an already-installed node.** The fix was in the tarball,
+on the controller, and never executed.
+
+**This is the third variant of the same family tonight** — a guard that
+blocks its own remediation:
+  1. (later 4) `creates:` marker that blessed itself and skipped the only
+     task that could repair the node.
+  2. (later 8b) `minion_id` probe that could never be satisfied, so the
+     skip decision was permanently false.
+  3. (later 9) `end_host` probe that makes installed nodes immune to new
+     tasks entirely.
+
+**Fix.** Move the GRE firewall block ABOVE the idempotency probe, with a
+header comment explaining why it must stay there. Added a grid-member
+check (`/etc/salt/pki/minion/minion_master.pub`) so the `salt-call
+state.apply firewall` nudge is skipped on a fresh sensor, where it would
+run before grid-join and fail — a fresh node needs no nudge anyway,
+because the manager-side override is written before its first highstate.
+
+**General lesson for this repo.** `meta: end_host` is a blunt instrument.
+Anything that must hold true for the *lifetime* of a node — firewall
+invariants, config overrides, drift correction — belongs BEFORE the
+idempotency probe. Only the expensive one-time install work belongs after
+it. Worth auditing `so_search` and `so_manager` for tasks that are
+silently unreachable on installed nodes.
+
+**Status.** PROPOSED — not yet exercised.
 
 ## 2026-07-28 (later 8) · bug · salt-minion lands in `failed` state; `/etc/salt/minion_id` never written; so-setup flags `StreamClosedException`
 
