@@ -61,6 +61,7 @@ turn you change any entry's status.
 | Date | Item | Status |
 |---|---|---|
 | 2026-07-28 (later 6) | NetworkManager eth0 profile mismatch | VERIFIED (fixed by later 7) |
+| 2026-07-29 (later 10) | Injected rule concatenated; restore silently skipped | PROPOSED |
 | 2026-07-29 (later 9) | `end_host` probe makes installed nodes immune to new tasks | PROPOSED |
 | 2026-07-28 (later 8) | Master rejects regenerated minion key (Denied) | VERIFIED (diagnosis); role fix PROPOSED |
 | 2026-07-28 (later 8b) | Our guard probed `/etc/salt/minion_id`, which never exists | PROPOSED |
@@ -75,6 +76,57 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-29 (later 10) · bug · Injected GRE rule concatenated onto the previous line; `iptables-restore` silently skipped
+
+**Symptom.** The GRE tasks ran, `salt-call state.apply firewall` reported
+`changed`, and the verification still found no proto-47 rule in
+`iptables -S INPUT`.
+
+**Detection.** `/etc/iptables/rules.v4` line 35 on the sensor:
+```
+-A INPUT -p icmp -j ACCEPT-A INPUT -s 172.16.5.1 -p gre -j ACCEPT
+```
+Two rules on ONE line. Invalid syntax → `iptables-restore --test` fails →
+`init.sls`'s `onlyif` skips the restore → salt reports success because the
+*file* changed, while the running ruleset never updated.
+
+**Root cause — two whitespace rules compounding, both ours:**
+  1. **Ansible templates with `trim_blocks=True`**, which ate the newline
+     immediately after `{% endraw %}` in the `so_gre_rule_block` default —
+     putting the literal `{%- if %}` guard and the rule on the same line.
+  2. **Salt's `{%-`** then stripped the newline BEFORE it, gluing the
+     result onto the preceding `-A INPUT -p icmp -j ACCEPT`.
+
+Writing Jinja that is rendered by Ansible and *then* rendered again by
+Salt means two independent whitespace-control regimes apply in sequence.
+That is a bad place to be clever.
+
+**Fix.** Drop the Jinja from the injected text entirely — emit a plain
+`-A INPUT -s <gw> -p gre -j ACCEPT\n`. The anchor already begins its own
+line, so prefixing directly is correct with no whitespace control at all.
+
+**Consequence — role guard dropped.** Manager and search nodes now also
+receive the ACCEPT, since they render the same template. Deliberate: it is
+a no-op there (no GRE tunnel, so the kernel drops proto 47 at demux) and
+it buys immunity from the Jinja-in-Jinja fragility. Still
+source-restricted to the router's mirror endpoint, not `0.0.0.0/0`.
+
+**Also added.** An explicit `iptables-restore --test /etc/iptables/rules.v4`
+task. `init.sls` skipping its restore is a SILENT failure by design, so
+without this a malformed ruleset shows up only as a mysterious "rule not
+present" — which is exactly the detour this bug caused.
+
+**`file_roots` confirmed correct** during this investigation:
+```
+file_roots:
+  base:
+    - /opt/so/saltstack/local/salt
+    - /opt/so/saltstack/default/salt
+```
+The override mechanism was sound; only the injected text was wrong.
+
+**Status.** PROPOSED — not yet exercised.
 
 ## 2026-07-29 (later 9) · bug · Role's `meta: end_host` idempotency probe makes an installed node unreachable by ANY new task
 

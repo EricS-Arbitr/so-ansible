@@ -21,16 +21,33 @@ so_sensor_netplan_tun: "/etc/netplan/60-so-mirror-tun.yaml"
 # is a different string, so this is unambiguous).
 so_gre_anchor: "-A INPUT -j LOGGING"
 
-# The block injected ahead of that anchor. Guarded on role so only sensors
-# accept GRE — the same template renders on manager and search nodes.
-# Source-restricted to the router's mirror endpoint rather than 0.0.0.0/0.
+# The block injected immediately ahead of that anchor.
 #
-# NOTE the {% raw %} fencing: the `{%- if GLOBALS.role ... %}` is SALT's
-# Jinja and must reach the file as literal text. Without the fence Ansible
-# evaluates it at template time, GLOBALS is undefined here, and the task
-# fails (or worse, silently renders an empty guard). Only so_prod_gateway
-# is meant to be substituted by Ansible.
-so_gre_rule_block: "{% raw %}{%- if GLOBALS.role == 'so-sensor' %}{% endraw %}\n-A INPUT -s {{ so_prod_gateway }} -p gre -j ACCEPT\n{% raw %}{%- endif %}{% endraw %}\n"
+# Deliberately a PLAIN iptables line with NO Jinja in it. The first
+# attempt wrapped it in a `{%- if GLOBALS.role == 'so-sensor' %}` guard,
+# {% raw %}-fenced so salt would see it literally. That produced
+# concatenated rules and a silently-skipped restore, because TWO
+# whitespace rules compounded (2026-07-29):
+#   1. Ansible templates with trim_blocks=True, which ate the newline
+#      right after `{% endraw %}` — putting the guard and the rule on one
+#      line.
+#   2. Salt's `{%-` then stripped the newline BEFORE it, gluing the rule
+#      onto the preceding `-A INPUT -p icmp -j ACCEPT`.
+# Result: `...-j ACCEPT-A INPUT -s ... -j ACCEPT`, which fails
+# `iptables-restore --test`, so init.sls's `onlyif` skipped the restore
+# and salt still reported success.
+#
+# The anchor already sits at the start of its own line, so prefixing this
+# block directly (with one trailing newline) is correct and needs no
+# whitespace control at all.
+#
+# TRADEOFF: without the role guard, manager and search nodes also get this
+# ACCEPT, since they render the same template. That is a deliberate choice
+# — it is a no-op there (no GRE tunnel exists, so the kernel drops proto
+# 47 at demux anyway) and it buys immunity from the Jinja-in-Jinja
+# fragility above. The rule is source-restricted to the router's mirror
+# endpoint, not 0.0.0.0/0.
+so_gre_rule_block: "-A INPUT -s {{ so_prod_gateway }} -p gre -j ACCEPT\n"
 
 # Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
 # is the only path that honors BNICS as the monitor interface instead of

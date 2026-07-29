@@ -82,6 +82,19 @@
   retries: 20
   delay: 30
 
+# firewall/init.sls guards its restore with `onlyif: iptables-restore
+# --test <file>`. A malformed rendered file therefore SKIPS the restore
+# silently while salt still reports success — the running ruleset just
+# goes stale. Check it explicitly so a syntax error is loud and names
+# itself, instead of surfacing as a mysterious "rule not present".
+- name: GRE firewall — syntax-check the rendered ruleset
+  ansible.builtin.command: "iptables-restore --test /etc/iptables/rules.v4"
+  become: true
+  changed_when: false
+  register: ipt_syntax
+  failed_when: ipt_syntax.rc != 0
+  when: so_grid_member.stat.exists
+
 - name: GRE firewall — verify proto 47 is now accepted in INPUT
   ansible.builtin.shell: |
     iptables -S INPUT | grep -E '\-p (gre|47) '
