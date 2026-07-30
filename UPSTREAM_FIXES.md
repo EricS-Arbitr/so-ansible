@@ -27,31 +27,20 @@ Detection → Fix → Workaround → **Status**.
 - **OPEN** — root cause not yet determined, or deliberately deferred.
 - **SUPERSEDED** — replaced by a later entry; kept for history.
 
-### Status 2026-07-28 ~23:57 — PHASE 50 COMPLETE
+### Status 2026-07-29 — VALIDATED ON A FRESH RANGE
 
-so-sensor-1 **joined the grid**. It cleared so-setup, stale-key deletion,
-salt-key acceptance, per-minion pillar generation and `so-status` verify.
-Entries (later 3) through (later 8) are all effectively closed on the
-live range.
+`site.yml` reports **`Success on attempt 3`** with **zero failed tasks
+across all 8 hosts** (controller, router-0, manager, search, sensor, and
+three Windows hosts), and `verify_so.sh` returns **26/26 pass, 0 fail**.
 
-`site.yml` now reaches **phase 60 verify** and fails on exactly one
-check: the 15-second tcpdump on `tun0` returns `0 packets captured`. That
-is the (2026-07-28) tun0 decap bug — now the sole blocker.
+This is the project's actual goal met: unattended distributed Security Onion
+into a range built from scratch, including the new `00-setup.yml` Windows +
+Linux baseline.
 
-Note the earlier decap evidence must be **re-gathered, not trusted**: it
-was collected while Suricata was bound to a dead `bond0` and before
-`INTERFACE=tun0` reached the pillar. This failure is a raw `tcpdump` on
-`tun0` though, independent of Suricata, so the kernel-level symptom is
-confirmed to persist.
-
-**New suspect introduced by the (later 7) fix:** with `/etc/SOCLOUD` set,
-`configure_network_sensor()` now runs
-`nmcli con add ifname tun0 con-name tun0 type ethernet ipv4.method
-disabled ethernet.mtu 9000` against `tun0`. NetworkManager taking
-ownership of a GRE device — and trying to force MTU 9000 on a 1476-MTU
-tunnel — could plausibly disturb the tunnel's GRE parameters. Verify
-`ip -d link show tun0` still reports `gre remote 172.16.5.1 local
-172.16.5.20` before pursuing deeper kernel theories.
+**It needed 3 of `deploy.sh`'s 3 attempts.** That is the retry design
+working, not a fault — the manager must finish before search/sensor can
+join, and grid-join involves reboots — but a fresh range is **not** a
+single-pass deploy. Budget for the full three attempts.
 
 ### Open / unverified items (the short list)
 
@@ -60,6 +49,17 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
+| 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
+| 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
+| 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
+| 2026-07-29 (00-setup) | `common` re-run hazard on a live grid (NM cutover + reboot) | OPEN (scope call) |
+| 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
+| 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
+
+**Everything else is VERIFIED on a fresh range** as of 2026-07-29.
+
+---|---|---|
 | 2026-07-29 (fresh-range 3) | `so_bundled_rules_filename` scope + soc.json unreachable after end_host | PROPOSED |
 | 2026-07-29 (fresh-range 2) | so_manager had no skip logic; reinstalled a healthy manager | PROPOSED |
 | 2026-07-29 (fresh-range) | `/root/failure` guard false-positived every fresh deploy | PROPOSED |
@@ -145,9 +145,9 @@ placed where it could only ever run once. Neither is visible to YAML
 validation or to the assertion audit — both need the question *"has this
 line ever actually executed?"*
 
-**Status.** PROPOSED. Note the manager DID write both markers on this run,
-so the next run will skip its install and reach the pre-probe soc.json
-include in seconds.
+**Status.** VERIFIED — fresh-range deploy 2026-07-29 reported
+`Success on attempt 3` with **zero failed tasks across all 8 hosts**, and
+`verify_so.sh` returned **26/26 pass, 0 fail**.
 
 ## 2026-07-29 (fresh-range 2) · bug · `so_manager` had NO skip logic — a healthy 14-container manager was reinstalled from scratch
 
@@ -201,8 +201,9 @@ checked whether assertions *could fire*; it did not check whether
 *expensive work was correctly gated*. Worth remembering as a distinct
 question to ask.
 
-**Status.** PROPOSED — applied, needs a re-run to confirm the manager
-reports `so-setup SKIPPED` instead of reinstalling.
+**Status.** VERIFIED — fresh-range deploy 2026-07-29 reported
+`Success on attempt 3` with **zero failed tasks across all 8 hosts**, and
+`verify_so.sh` returned **26/26 pass, 0 fail**.
 
 ## 2026-07-29 (fresh-range) · bug · MY `/root/failure` guard false-positives on EVERY fresh deploy — elastic-agent uninstall noise
 
@@ -259,7 +260,11 @@ full, so the diagnostic value is kept without the false stop.
 brittle signal for another and would need extending every time SO adds a
 cleanup step.
 
-**Status.** DIAGNOSIS VERIFIED 2026-07-29 — `so-status` on so-manager
+**Status.** VERIFIED — fresh-range deploy 2026-07-29 reported
+`Success on attempt 3` with **zero failed tasks across all 8 hosts**, and
+`verify_so.sh` returned **26/26 pass, 0 fail**.
+
+Original diagnosis note: `so-status` on so-manager
 reports **14/14 containers running** and "This onion is ready to make your
 adversaries cry!" while `/root/failure` was present. so-setup had fully
 succeeded; the marker was pure false positive and this guard was the only
@@ -342,10 +347,11 @@ Windows moving into scope means the **client-clock problem from
 `RealTimeIsUniversal` / the timezone on the Windows hosts would prevent
 the SOC login loop from recurring on every fresh range. Not added unasked.
 
-**Status.** PROPOSED — YAML validated, group membership cross-checked
-against host_vars, not yet run. `vault_simspace_password` is referenced by
-group_vars/windows.yml and must be confirmed to decrypt to the long
-`Simspace1!Simspace1!` form (the SO nodes use a different, shorter secret).
+**Status.** VERIFIED — fresh-range deploy 2026-07-29. All three Windows
+hosts came through `00-setup` clean (`DC01`, `ops-wks-01`, `eng-wks-01` each
+`ok=10 changed=1 failed=0`), and the whole run finished with zero failures.
+`vault_simspace_password` was independently confirmed to exist during the
+vault rekey, so the WinRM credential reference is sound.
 
 ## 2026-07-29 (later 14) · platform · SOC login loops on "This login form has expired" — Windows client clock 4h ahead (RTC-as-local-time)
 
@@ -480,9 +486,15 @@ of firing. The `so-firewall` "already exists" and `so-minion` "does not
 match any unaccepted keys" `failed_when` lists are both correct, and both
 have been observed firing on real runs.
 
-**Status.** Fixes PROPOSED — YAML validated, not yet exercised on a
-deploy. `so_manager`'s new checks in particular are unexercised, and by
-the standard of this very audit that means unproven.
+**Status.** VERIFIED (deployed) — fresh-range deploy 2026-07-29 passed with
+zero failures, exercising so_manager's new checks on a real install.
+
+**But the audit missed a whole class.** It asked "can this assertion fire?"
+and never asked "has this line ever executed?" or "is expensive work
+correctly gated?". Fresh-range testing then found three things the audit
+did not: so_manager having no skip logic at all, a variable referenced only
+from a never-run path, and a task placed where it could only run once. Ask
+all three questions next time.
 
 ## 2026-07-29 (later 13) · bug · Vault path wrong in both helper scripts; deploy.sh's plaintext-vault guard had NEVER fired
 
@@ -522,8 +534,9 @@ true. **A guard whose failure path has never been exercised is not a
 guard.** Worth a deliberate pass over the remaining assertions in this
 repo asking "has this ever actually fired?"
 
-**Status.** PROPOSED — `bash -n` clean on both scripts; the corrected
-`vault-tools.sh view` path needs confirming on the controller.
+**Status.** VERIFIED — fresh-range deploy 2026-07-29. `deploy.sh` ran to
+completion, so the corrected vault path resolves and the fail-closed guard
+does not block a legitimate deploy.
 
 ## 2026-07-29 (later 12) · bug · verify_so.sh reported 13/26 failures on a fully healthy stack — the checks could not pass
 

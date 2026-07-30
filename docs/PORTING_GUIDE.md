@@ -45,8 +45,19 @@ Work top to bottom. Each step has a section below.
 6. [ ] Confirm **collections** install (§6)
 7. [ ] Recreate `/home/simspace/.vault_pass` on the controller, contents `simspace1` — **it does not persist between range spin-ups**
 8. [ ] `./build_tarball.sh`, commit, push — the controller deploys from the tarball, not a git pull
-9. [ ] `sudo ./deploy.sh`
+9. [ ] `sudo ./deploy.sh` — **budget for all three attempts** (see below)
 10. [ ] `sudo ./verify_so.sh -v` — expect 26/26
+
+### A fresh range is not a single-pass deploy
+
+Validated 2026-07-29: a from-scratch range succeeded on **attempt 3 of 3**.
+That is `deploy.sh`'s retry design working as intended, not a fault. The
+manager must complete before search and sensor can join it, grid-join
+involves reboots, and salt highstates take 5–15 minutes to settle. Plan on
+the better part of a working session, not twenty minutes.
+
+If it fails on attempt 3, that is a real failure worth investigating —
+anything before that is normal sequencing.
 
 ---
 
