@@ -47,7 +47,17 @@ so_gre_anchor: "-A INPUT -j LOGGING"
 # 47 at demux anyway) and it buys immunity from the Jinja-in-Jinja
 # fragility above. The rule is source-restricted to the router's mirror
 # endpoint, not 0.0.0.0/0.
-so_gre_rule_block: "-A INPUT -s {{ so_prod_gateway }} -p gre -j ACCEPT\n"
+# Which source address the sensor's SO firewall permits GRE from.
+#
+# Defaults to so_prod_gateway, which is correct ONLY where the mirroring
+# router is also the sensor's gateway — true in this dev range, where
+# router-0 is both. It is NOT true in general: PowerPlant's sensors sit on
+# pp-security behind pp-internal-router (172.16.9.1) while the mirroring
+# routers are remote (172.16.0.42, 192.168.200.202, 75.21.1.2), so the rule
+# would drop every mirrored packet. Override per sensor in host_vars.
+so_gre_allowed_source: "{{ so_prod_gateway }}"
+
+so_gre_rule_block: "-A INPUT -s {{ so_gre_allowed_source }} -p gre -j ACCEPT\n"
 
 # Create /etc/SOCLOUD so so-setup takes its "cloud" interface path, which
 # is the only path that honors BNICS as the monitor interface instead of
