@@ -28,8 +28,7 @@ so_snapshot_files:
 # Python's urllib does not parse CIDR notation in no_proxy at all
 # (UPSTREAM_FIXES 2026-07-23). The CIDRs here are harmless but the per-host
 # entries appended in the template are what actually work.
-so_no_proxy_subnets:
-  - "{{ so_subnet_security }}"
-  - "{{ so_subnet_operations }}"
-  - "{{ so_subnet_engineering }}"
-  - "{{ so_subnet_services }}"
+# Empty default ON PURPOSE — a default that named specific subnets would
+# reference variables that do not exist in every range, which is the bug this
+# variable was created to fix. Each range sets its own list in group_vars.
+so_no_proxy_subnets: []

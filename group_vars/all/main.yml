@@ -111,6 +111,13 @@ so_subnet_operations: "172.16.8.0/24"
 so_subnet_engineering: "172.16.6.0/24"
 so_subnet_services: "172.16.7.0/24"
 
+# Subnets that bypass the upstream proxy (so_base/environment.j2).
+so_no_proxy_subnets:
+  - "{{ so_subnet_security }}"
+  - "{{ so_subnet_operations }}"
+  - "{{ so_subnet_engineering }}"
+  - "{{ so_subnet_services }}"
+
 # Subnets allowed to reach the SOC WebUI + so-allow rules.
 # For dev: security subnet itself (analyst boxes) + mgmt plane (ansible).
 so_allow_subnets:
