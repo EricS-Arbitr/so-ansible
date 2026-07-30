@@ -15,3 +15,21 @@ so_snapshot_files:
   - so-functions
   - so-variables
   - so-whiptail
+
+# In-range subnets that must bypass the upstream proxy.
+#
+# Was a hardcoded list of so_subnet_{security,operations,engineering,services}
+# in templates/environment.j2 — dev-range-specific names that do not exist in
+# other ranges (PowerPlant has services/business/engineering/legal/infosec/dmz
+# and no "operations"), so the template rendered undefined there. Override in
+# group_vars per range.
+#
+# NOTE these must be literal names, not CIDRs, for the hostname portion —
+# Python's urllib does not parse CIDR notation in no_proxy at all
+# (UPSTREAM_FIXES 2026-07-23). The CIDRs here are harmless but the per-host
+# entries appended in the template are what actually work.
+so_no_proxy_subnets:
+  - "{{ so_subnet_security }}"
+  - "{{ so_subnet_operations }}"
+  - "{{ so_subnet_engineering }}"
+  - "{{ so_subnet_services }}"
