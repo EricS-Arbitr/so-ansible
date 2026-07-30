@@ -49,7 +49,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-30 | SOC detection content: soc.json patch reverted by highstate; needs pillar + in-range sources | OPEN |
+| 2026-07-30 | SOC detection content → SO airgap mode + staged local content | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
 | 2026-07-28 | so-soc sigma + AI summaries + playbooks can't reach github | OPEN (folded into 2026-07-30) |
@@ -157,9 +157,55 @@ from runtime egress, and a new §9.17 records the whole issue.
 `grep -rln emergingthreats /opt/so/saltstack/` plus the pillar structure
 before writing anything.
 
-**Status.** OPEN. `roles/so_manager/tasks/soc_etopen.yml` should be treated
-as non-functional until replaced — it is harmless (idempotent, reverted
-within 15 min) but achieves nothing.
+**FIX IMPLEMENTED 2026-07-30 — use SO's own airgap mode.**
+
+`vars/globals.map.jinja:17` reads `'airgap': INIT.PILLAR.global.airgap`, and
+`soc/merged.map.jinja` then swaps EVERY remote source for a local one and
+sets `airgapEnabled: true` (which also stops Yara/Sigma auto-update):
+
+| Engine | Airgap source (from `soc/defaults.yaml`) |
+|---|---|
+| Suricata ETOPEN | `/nsm/rules/suricata/etopen/` — `sourceType: directory`, **not a URL** |
+| Sigma / ElastAlert | `file:///nsm/rules/detect-sigma/repos/securityonion-resources` |
+| Yara / Strelka | `file:///nsm/rules/detect-yara/repos/securityonion-yara` |
+| Playbooks | `file:///nsm/airgap-resources/playbooks/securityonion-resources-playbooks` |
+
+One pillar boolean replaces four bespoke overrides, and it is the path SO
+documents and tests — so an SO upgrade will not quietly break it, unlike a
+hand-rolled `sourcePath`.
+
+**What was built.**
+  - `group_vars/all/main.yml` — `so_airgap_mode` (default **true**) plus the
+    repo list and paths, all taken from `soc/defaults.yaml`'s `airgap:`
+    blocks rather than invented.
+  - `so_apt_mirror/tasks/airgap_content.yml` — clones the three content
+    repos on the CONTROLLER (the only host with mgmt-plane egress), tars
+    them, publishes them on the nginx that already serves the SO source.
+    Full clones, not `--depth 1`: SOC re-clones from the `file://` path we
+    stage, and a shallow repo is not reliably usable as a clone source.
+  - `so_manager/tasks/airgap_mode.yml` — stages the content into the four
+    `/nsm/...` paths (ETOPEN extracted with `--strip-components=1` because
+    airgap wants loose `.rules` files, not the tarball's `rules/` prefix),
+    read-modify-writes `global:airgap: true` into the local pillar, applies
+    the `soc` state, then **proves** it: `salt-call pillar.get global:airgap`
+    must return True AND `soc.json` must reference the local ETOPEN
+    directory. Positive proof, per the standing rule here.
+  - Included both **before** `end_host` (for an already-installed manager)
+    and at the end of the role (fresh install, where `/opt/so` does not
+    exist yet) — §9.4, which has now bitten five times.
+  - **`soc_etopen.yml` deleted.** It patched a salt-rendered file and could
+    never survive a highstate.
+
+**Deliberate consequence.** Detection content is now FROZEN at whatever is
+staged. Correct for an exercise range, but refreshing is an explicit act:
+delete the tarballs under `<mirror>/so-source/` on the controller and re-run
+the mirror role. Documented in the task file so it does not surprise anyone.
+
+**Status.** PROPOSED — YAML validated, not yet run. Two things are unproven
+and will fail loudly rather than silently if wrong: whether SO's pillar top
+includes `local/pillar/global/adv_global.sls` (the `pillar.get` verify
+catches it), and whether the three repos clone cleanly through the
+mgmt-plane proxy.
 
 ## 2026-07-29 (fresh-range 3) · bug · `so_bundled_rules_filename` undefined in so_manager — role defaults are role-scoped
 

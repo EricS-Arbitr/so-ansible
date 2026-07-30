@@ -62,6 +62,49 @@ so_source_tarball_url: "{{ so_mirror_url }}/so-source/securityonion-{{ so_git_re
 # reached a fresh manager.
 so_bundled_rules_filename: "emerging.rules.tar.gz"
 
+# --- SO airgap mode (IS-INET ranges) -------------------------------------
+# Target ranges have NO real internet on the in-game plane — only a staged
+# simulation (RC-IS-INET), as in so-ab-pp and airfield-range. SOC's detection
+# engines otherwise try to reach github + rules.emergingthreats.net every 5
+# minutes and fail forever.
+#
+# SO has first-class airgap support keyed off ONE pillar boolean
+# (`global:airgap`, read by vars/globals.map.jinja). Setting it swaps every
+# remote content source for a local path. See
+# roles/so_manager/tasks/airgap_mode.yml for the full mechanism.
+#
+# Set false ONLY for a range that genuinely has in-game internet — then SO
+# fetches upstream itself and none of the staging below is needed.
+so_airgap_mode: true
+
+# Where so_apt_mirror clones repos before tarring them (controller-side).
+so_airgap_build_dir: "/var/tmp/so-airgap-build"
+
+# Directory SO reads ETOPEN from in airgap mode. NOTE this is a DIRECTORY of
+# .rules files (`sourceType: directory`), not a URL — different shape from
+# the non-airgap config.
+so_airgap_etopen_dest: "/nsm/rules/suricata/etopen"
+
+# Local pillar file carrying the airgap flag. `adv_*` is SO's convention for
+# operator overrides; `soc_*` files are owned by the SOC config UI and get
+# rewritten by it. If SO's pillar top does not include this file the setting
+# silently will not apply — which is exactly why airgap_mode.yml verifies
+# `salt-call pillar.get global:airgap` afterwards instead of assuming.
+so_airgap_pillar_file: "/opt/so/saltstack/local/pillar/global/adv_global.sls"
+
+# Content repos SO expects locally in airgap mode. `dest` paths come from
+# soc/defaults.yaml's `airgap:` blocks — do not invent them.
+so_airgap_repos:
+  - name: securityonion-resources
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources"
+    dest: "/nsm/rules/detect-sigma/repos/securityonion-resources"
+  - name: securityonion-yara
+    url: "https://github.com/Security-Onion-Solutions/securityonion-yara"
+    dest: "/nsm/rules/detect-yara/repos/securityonion-yara"
+  - name: securityonion-resources-playbooks
+    url: "https://github.com/Security-Onion-Solutions/securityonion-resources-playbooks"
+    dest: "/nsm/airgap-resources/playbooks/securityonion-resources-playbooks"
+
 # --- Network layout (dev range) ---
 so_subnet_security: "172.16.5.0/24"
 so_subnet_operations: "172.16.8.0/24"

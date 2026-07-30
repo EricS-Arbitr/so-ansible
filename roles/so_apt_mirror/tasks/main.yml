@@ -204,9 +204,18 @@
   changed_when: false
   when: bundled_rules.stat.exists
 
+# SO's airgap mode reads sigma / yara / playbook content from local file://
+# repos instead of github. Clone + publish them here — the controller is the
+# only host with mgmt-plane egress, and the in-game plane is airgapped in the
+# target IS-INET ranges.
+- name: Stage SO airgap detection content on the mirror
+  ansible.builtin.include_tasks: airgap_content.yml
+  when: so_airgap_mode | bool
+
 - name: Report mirror status
   ansible.builtin.debug:
     msg: |
       so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
         SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
-      {% if bundled_rules.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}{% endif %}
+      {% if bundled_rules.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}
+      {% endif %}{% if so_airgap_mode %}  Airgap content: {{ so_airgap_repos | map(attribute='name') | join(', ') }}{% endif %}
