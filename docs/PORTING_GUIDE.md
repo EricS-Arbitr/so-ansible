@@ -50,14 +50,15 @@ Work top to bottom. Each step has a section below.
 
 ### A fresh range is not a single-pass deploy
 
-Validated 2026-07-29: a from-scratch range succeeded on **attempt 3 of 3**.
-That is `deploy.sh`'s retry design working as intended, not a fault. The
-manager must complete before search and sensor can join it, grid-join
-involves reboots, and salt highstates take 5–15 minutes to settle. Plan on
-the better part of a working session, not twenty minutes.
+A from-scratch range first succeeded on **attempt 3 of 3** (2026-07-29);
+once the marker/skip logic was corrected it succeeded on **attempt 1**
+(2026-07-30). Budget for all three regardless — the manager must complete
+before search and sensor can join it, grid-join involves reboots, and salt
+highstates take 5–15 minutes to settle. Plan on the better part of a working
+session, not twenty minutes.
 
-If it fails on attempt 3, that is a real failure worth investigating —
-anything before that is normal sequencing.
+Attempts 1 and 2 failing is normal sequencing, not a fault. Failing on
+attempt 3 is a real failure worth investigating.
 
 ---
 

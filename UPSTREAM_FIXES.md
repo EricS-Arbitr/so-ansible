@@ -49,7 +49,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-30 | SOC detection content → SO airgap mode + staged local content | PROPOSED |
+| 2026-07-30 | SOC detection content → SO airgap mode + staged local content | VERIFIED (deploy); SOC sync pending |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
 | 2026-07-28 | so-soc sigma + AI summaries + playbooks can't reach github | OPEN (folded into 2026-07-30) |
@@ -201,11 +201,21 @@ staged. Correct for an exercise range, but refreshing is an explicit act:
 delete the tarballs under `<mirror>/so-source/` on the controller and re-run
 the mirror role. Documented in the task file so it does not surprise anyone.
 
-**Status.** PROPOSED — YAML validated, not yet run. Two things are unproven
-and will fail loudly rather than silently if wrong: whether SO's pillar top
-includes `local/pillar/global/adv_global.sls` (the `pillar.get` verify
-catches it), and whether the three repos clone cleanly through the
-mgmt-plane proxy.
+**Status.** VERIFIED (deploy) — 2026-07-30, `Success on attempt 1` with zero
+failures. Both previously-unproven assumptions held:
+  - SO's pillar top **does** pick up `local/pillar/global/adv_global.sls` —
+    the role's `salt-call pillar.get global:airgap` gate returned True, and
+    the `soc.json` grep for the local ETOPEN directory passed. Neither is a
+    soft check; the run could not have succeeded otherwise.
+  - The three content repos cloned through the mgmt-plane proxy and
+    published (controller went `changed=1` → `changed=4`).
+
+so-manager went `changed=6` → `changed=13`, consistent with pillar write +
+content staging + soc state apply.
+
+**Still to confirm at runtime:** that SOC's 5-minute sync loop now succeeds
+and the Detections page clears. The deploy proves the configuration landed,
+not that the engines like it.
 
 ## 2026-07-29 (fresh-range 3) · bug · `so_bundled_rules_filename` undefined in so_manager — role defaults are role-scoped
 
