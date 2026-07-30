@@ -65,6 +65,68 @@
     - common
     - win_adapter_rename
 
+# Windows clock correction. Added 2026-07-30 after this broke SOC logins on
+# two consecutive ranges.
+#
+# The platform's hardware clock holds UTC — the Linux hosts read it correctly
+# (`timedatectl` reports "RTC in local TZ: no"). Windows, however, treats the
+# RTC as LOCAL time by default, so it reads the same value, assumes it is
+# Eastern, and computes UTC as RTC + 4h. The workstation then disagrees with
+# every Linux node in the range by exactly one timezone offset.
+#
+# That is not cosmetic. SOC's login page is a JS app: it fetches the kratos
+# login flow and compares `expires_at` against the BROWSER's clock. Flows
+# live 60 minutes, so a client 4h fast sees every freshly-minted flow as
+# ~3h expired and loops forever on "This login form has expired", with no
+# server-side error at all. Cost hours to diagnose the first time — see
+# UPSTREAM_FIXES 2026-07-29 (later 14).
+#
+# Two parts, both needed:
+#   1. RealTimeIsUniversal makes Windows read the RTC as UTC from the next
+#      boot onward — fixes the cause, but only takes effect on reboot.
+#   2. An explicit time set corrects the CURRENT session, so no reboot is
+#      required to unblock anyone. Idempotent: only fires when drift > 60s.
+- name: Windows clock — align with the range's UTC
+  hosts: windows
+  gather_facts: false
+  vars:
+    # Evaluated on the controller, whose clock is correct (same UTC RTC,
+    # read correctly by Linux).
+    range_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  tasks:
+    - name: Treat the RTC as UTC from the next boot (fixes the root cause)
+      ansible.windows.win_regedit:
+        path: HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation
+        name: RealTimeIsUniversal
+        data: 1
+        type: dword
+
+    - name: Correct the running clock if it has drifted from the range
+      ansible.windows.win_powershell:
+        script: |
+          $target = [DateTime]::ParseExact(
+            '{{ range_utc }}', 'yyyy-MM-ddTHH:mm:ssZ',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::AssumeUniversal -bor
+            [Globalization.DateTimeStyles]::AdjustToUniversal)
+          $drift = [Math]::Abs(((Get-Date).ToUniversalTime() - $target).TotalSeconds)
+          if ($drift -gt 60) {
+            Set-Date -Date $target.ToLocalTime() | Out-Null
+            $Ansible.Changed = $true
+            Write-Output ("corrected: was {0:N0}s off, now " -f $drift) + [DateTime]::UtcNow.ToString('o')
+          } else {
+            $Ansible.Changed = $false
+            Write-Output ("ok: {0:N0}s from range UTC" -f $drift)
+          }
+      register: win_clock
+
+    - name: Report Windows clock state
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ win_clock.output[0] | default('no output') }}"
+  tags:
+    - common
+    - win_clock
+
 # Pre-bootstrap for Linux: drop a NetworkManager conf snippet that opts eth*
 # devices INTO management before the common role's nmcli tasks run. Without
 # this, netplan's renderer:NetworkManager stub (with no `ethernets:` listed)

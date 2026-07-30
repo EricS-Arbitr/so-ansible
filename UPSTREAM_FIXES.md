@@ -52,7 +52,7 @@ turn you change any entry's status.
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
 | 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
-| 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
+| 2026-07-29 (later 14) | Host time config — Windows AUTOMATED 2026-07-30; Linux still unconfigured | PARTIAL |
 | 2026-07-29 (00-setup) | `common` re-run hazard on a live grid (NM cutover + reboot) | OPEN (scope call) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
@@ -64,7 +64,7 @@ turn you change any entry's status.
 | 2026-07-29 (fresh-range 2) | so_manager had no skip logic; reinstalled a healthy manager | PROPOSED |
 | 2026-07-29 (fresh-range) | `/root/failure` guard false-positived every fresh deploy | PROPOSED |
 | 2026-07-29 (00-setup) | New playbook: groups/roles/vars added; re-run hazard on live range | PROPOSED |
-| 2026-07-29 (later 14) | No host time config anywhere; Windows clients drift vs UTC RTC | OPEN (gap) |
+| 2026-07-29 (later 14) | Host time config — Windows AUTOMATED 2026-07-30; Linux still unconfigured | PARTIAL |
 | 2026-07-29 (audit) | so_manager missing all 07-28 fixes; so-status rc-only; pillar no-op | PROPOSED |
 | 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
@@ -407,8 +407,29 @@ same UTC RTC; the Windows placeholders do not. Worth adding an NTP/time
 task pointing at an in-range source — the manager is the natural
 candidate, being salt master already.
 
-**Status.** ROOT CAUSE CONFIRMED. Client-side fix; nothing to change in
-the roles. The time-configuration gap is logged as OPEN below.
+**Status.** ROOT CAUSE CONFIRMED (2026-07-29) · **AUTOMATED 2026-07-30.**
+
+It recurred immediately on the next fresh range — a new Windows VM from the
+same image, and nothing in the project configured time. Fixing it by hand
+per range was not sustainable, so `playbooks/00-setup.yml` gained a
+`Windows clock — align with the range's UTC` play (tags: `common`,
+`win_clock`) doing two things:
+
+  1. **`RealTimeIsUniversal=1`** — makes Windows read the RTC as UTC from
+     the next boot. Fixes the cause, but only applies after a reboot.
+  2. **An explicit `Set-Date`** against the controller's UTC (obtained with
+     a `lookup('pipe', 'date -u ...')`, the controller's clock being correct
+     because Linux reads the shared RTC properly). This corrects the running
+     session so nobody has to reboot to get logged in. Idempotent — it only
+     fires when drift exceeds 60s, and reports the measured drift either
+     way.
+
+Both are needed: the registry key alone leaves the current session wrong,
+and `Set-Date` alone is undone by the next reboot.
+
+**Status of the wider gap.** This closes it for Windows. Linux hosts still
+have no time configuration and no reachable NTP; they agree only because
+they share one correctly-read UTC RTC. That remains OPEN below.
 
 ## 2026-07-29 (audit) · assertion audit — "has this check ever actually fired?"
 
