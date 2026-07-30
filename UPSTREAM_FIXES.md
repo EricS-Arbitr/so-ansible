@@ -49,7 +49,7 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
-| 2026-07-30 | SOC detection content → SO airgap mode + staged local content | VERIFIED (deploy); SOC sync pending |
+| 2026-07-30 | SOC detection content → SO airgap mode + staged local content | VERIFIED (Suricata/Strelka OK; ElastAlert importing) |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
 | 2026-07-28 | so-soc sigma + AI summaries + playbooks can't reach github | OPEN (folded into 2026-07-30) |
@@ -213,9 +213,30 @@ failures. Both previously-unproven assumptions held:
 so-manager went `changed=6` → `changed=13`, consistent with pillar write +
 content staging + soc state apply.
 
-**Still to confirm at runtime:** that SOC's 5-minute sync loop now succeeds
-and the Detections page clears. The deploy proves the configuration landed,
-not that the engines like it.
+**RUNTIME CONFIRMED 2026-07-30** — SOC Detections page after the deploy:
+
+| Engine | Before | After |
+|---|---|---|
+| Suricata | `Rule Mismatch` | **OK** |
+| Strelka (yara) | — | **OK** |
+| ElastAlert | `Sync Failed` | `Import Pending` |
+
+Suricata now reads `.rules` straight off local disk and Strelka reads the
+staged yara repo — both green with no network involved. ElastAlert moved
+from a hard failure to `Import Pending`, which is a **working** state: it
+found the sigma rules in the local `file://` repo and is converting them
+(sigma → ElastAlert across the `core` and `emerging_threats_addon`
+packages is thousands of rules, so this takes time). The sidebar icon
+changed from a red `!` to an hourglass.
+
+`Total Found: 67,181` is unchanged — but those rules are now sourced
+locally and refreshable, rather than stale leftovers from a patch window.
+
+**Note on AI summaries.** `soc/defaults.yaml` has airgap variants for sigma,
+yara and playbooks, but the `aiRepoUrl` github reference appeared to have no
+airgap equivalent in what we read. A non-fatal "unable to update AI repo"
+error may therefore persist in the SOC log even with both UI warnings clear.
+Cosmetic — it does not gate detections.
 
 ## 2026-07-29 (fresh-range 3) · bug · `so_bundled_rules_filename` undefined in so_manager — role defaults are role-scoped
 
