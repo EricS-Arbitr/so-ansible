@@ -49,9 +49,10 @@ turn you change any entry's status.
 
 | Date | Item | Status |
 |---|---|---|
+| 2026-07-30 | SOC detection content: soc.json patch reverted by highstate; needs pillar + in-range sources | OPEN |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` where so-setup never ran | OPEN (harmless) |
-| 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
+| 2026-07-28 | so-soc sigma + AI summaries + playbooks can't reach github | OPEN (folded into 2026-07-30) |
 | 2026-07-29 (later 14) | Host time config — Windows AUTOMATED 2026-07-30; Linux still unconfigured | PARTIAL |
 | 2026-07-29 (00-setup) | `common` re-run hazard on a live grid (NM cutover + reboot) | OPEN (scope call) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
@@ -69,7 +70,7 @@ turn you change any entry's status.
 | 2026-07-29 (later 13) | Vault path wrong; deploy.sh plaintext guard never fired | PROPOSED |
 | 2026-07-28 | so-setup "Could not reach so-manager" (60s timeout, non-fatal) | OPEN |
 | 2026-07-28 | What originally created `setup-completed` on a node where so-setup never ran | OPEN (harmless now) |
-| 2026-07-28 | so-soc sigma rules + AI summaries can't git-clone github.com | OPEN (sub-item) |
+| 2026-07-28 | so-soc sigma + AI summaries + playbooks can't reach github | OPEN (folded into 2026-07-30) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 | 2026-07-28 (later 5) | Ad-hoc `ansible` needs `sudo` (vault perms) | OPEN (documented) |
 
@@ -95,6 +96,70 @@ turn you change any entry's status.
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
 ---
+
+## 2026-07-30 · bug · Patching `soc.json` does not survive; SOC detection content needs in-range sources (IS-INET)
+
+**Symptom.** SOC Detections page: `ElastAlert: Sync Failed` and
+`Suricata: Rule Mismatch`.
+
+**One root cause, not two.** Every failure in the SOC log is the same DNS
+failure from inside the containers:
+```
+lookup github.com on 127.0.0.11:53: server misbehaving
+lookup rules.emergingthreats.net on 127.0.0.11:53: server misbehaving
+```
+`127.0.0.11` is Docker's embedded resolver, and there is no external DNS on
+the in-game plane. Four fetches fail on a 5-minute retry loop: the ETOPEN
+ruleset, sigma packages (github release zips), the AI-summaries repo and the
+playbooks repo (git clones). ElastAlert consequently has **zero** enabled
+rules — the log shows `scrolled for 0 results`.
+
+**Our soc.json patch was reverted.** `/opt/so/conf/soc/soc.json` is rendered
+by salt; the highstate runs every 15 minutes and puts the upstream URL back.
+Confirmed 2026-07-30: `sourcePath` was `https://rules.emergingthreats.net/...`
+again, and the 67,181 rules SOC displays are stale leftovers from the window
+when the patch held.
+
+**This repeats the §9.1 lesson.** The GRE firewall taught us to change
+salt's *inputs*, not its rendered *outputs* — and I then wrote a task that
+patches a rendered output. Making it "re-runnable" (2026-07-29, fresh-range
+3) could never work: Ansible runs occasionally, the highstate runs every 15
+minutes. The `soc_etopen.yml` approach is invalid and must move to a pillar
+under `/opt/so/saltstack/local/pillar/`.
+
+**Scope change — target ranges are IS-INET ranges.** Confirmed by Eric
+2026-07-30: this project will deploy into ranges whose in-game plane has
+**no real internet**, only a staged simulation (`RC-IS-INET` — unbound
+resolving arbitrary names to in-range IPs, plus mail/web), as used in
+so-ab-pp and airfield-range. Two planes must be kept distinct:
+  - **mgmt-plane proxy** (`inet_proxy_addr`, `10.255.240.1:3128` in the dev
+    range) — out-of-band, invisible in-scenario, used for *install-time*
+    package fetches. so-ansible already depends on it for apt.
+  - **in-game plane** — airgapped. Anything SO fetches at *runtime* must be
+    served from in-range hosts.
+
+This also makes the porting guide's old blanket "range must provide an
+egress proxy" requirement wrong as written; updated to separate install-time
+from runtime egress, and a new §9.17 records the whole issue.
+
+**Fix direction (not yet implemented).**
+  - ETOPEN: `so_apt_mirror` already publishes the tarball on the
+    controller's nginx. Repoint SOC's ruleset `sourcePath` **via pillar** so
+    the highstate preserves it.
+  - sigma / AI summaries / playbooks: mirror in-range, or disable those
+    engines. Disabling is the honest choice for an airgapped range and
+    clears the warnings rather than leaving them permanently red.
+  - A mgmt-proxy shortcut (proxy env into the so-soc container) would fix
+    all four at once, but makes detection content depend on out-of-band
+    egress — an exercise-design decision, not a technical one.
+
+**Blocked on:** identifying the SOC pillar keys. Need
+`grep -rln emergingthreats /opt/so/saltstack/` plus the pillar structure
+before writing anything.
+
+**Status.** OPEN. `roles/so_manager/tasks/soc_etopen.yml` should be treated
+as non-functional until replaced — it is harmless (idempotent, reverted
+within 15 min) but achieves nothing.
 
 ## 2026-07-29 (fresh-range 3) · bug · `so_bundled_rules_filename` undefined in so_manager — role defaults are role-scoped
 

@@ -88,9 +88,20 @@ to accept jammy (see §9.12). Other Ubuntu releases are untested here.
   Everything assumes NIC0 = mgmt (`eth0` / `Ethernet0`), NIC1 = production.
 - **A security/SOC subnet** holding manager, search and sensor. They must
   reach each other on their production IPs.
-- **An egress proxy** for package fetches. SO pulls from
-  `packages.securityonion.net`, Docker, Elastic and Ubuntu repos. There is
-  no airgap path on Ubuntu (§9.13).
+- **A path to packages at INSTALL time.** SO pulls from
+  `packages.securityonion.net`, Docker, Elastic and Ubuntu repos during
+  `so-setup`, and there is no airgap installer on Ubuntu (§9.13). In the
+  dev range this is the SimSpace mgmt-plane proxy
+  (`10.255.240.1:3128`) — out-of-band and invisible in-scenario, the same
+  `inet_proxy_addr` airfield-range and PowerPlant use.
+
+  **Target ranges are IS-INET ranges** — the in-game plane has no real
+  internet, only a staged simulation (`RC-IS-INET`: unbound resolving
+  arbitrary names to in-range IPs, plus mail/web). Do not assume in-game
+  egress. Distinguish clearly:
+  - *install-time* fetches → mgmt-plane proxy, if the range has one;
+  - *runtime* fetches by SO containers (detection content) → must come
+    from in-range sources. See §9.17.
 - **Monitored subnets** whose traffic you want captured, each gatewayed by
   the router.
 
@@ -473,6 +484,46 @@ plaintext-vault guard short-circuited to always-pass by `[ -f missing ] &&`.
 Each actively misdirected debugging for hours.
 **When a check and a subsystem fail together, confirm the check is sound
 before treating it as evidence.**
+
+### 9.17 SOC's detection content needs the internet, every 5 minutes — and patching `soc.json` does NOT work
+
+**Symptom.** SOC's Detections page shows `ElastAlert: Sync Failed` and
+`Suricata: Rule Mismatch`. Packet inspection is unaffected; detection
+*content* never updates.
+
+**Cause — one, not two.** Every failure is the same DNS failure from inside
+the containers:
+```
+lookup github.com on 127.0.0.11:53: server misbehaving
+lookup rules.emergingthreats.net on 127.0.0.11:53: server misbehaving
+```
+`127.0.0.11` is Docker's embedded resolver. With no in-game external DNS,
+**four** separate fetches fail: the ETOPEN ruleset, the sigma packages
+(github release zips), the AI-summaries repo and the playbooks repo (both
+git clones). SOC retries every 5 minutes, forever.
+
+**What does NOT work: patching `/opt/so/conf/soc/soc.json`.** That file is
+rendered by salt. The highstate runs every 15 minutes and reverts it.
+Verified 2026-07-30 — a patch applied by Ansible was gone, `sourcePath`
+back to `rules.emergingthreats.net`, and the 67K rules it had loaded were
+stale. Same lesson as the GRE firewall (§9.1): **change salt's inputs, not
+its rendered outputs.** Any fix must live in a pillar under
+`/opt/so/saltstack/local/pillar/`.
+
+**Approach for an IS-INET range.** The in-game plane is airgapped, so
+runtime fetches must be served in-range:
+  - **ETOPEN** — `so_apt_mirror` already publishes the tarball on the
+    controller's nginx. Repoint SOC's ruleset `sourcePath` at it *via
+    pillar* so the highstate preserves it.
+  - **sigma / AI summaries / playbooks** — github git-clones and release
+    zips. Either mirror them in-range or disable those engines. Disabling
+    is the honest option for an airgapped range and clears the warnings.
+  - If the range does have a mgmt-plane proxy, injecting proxy env into
+    the so-soc container is a shortcut that fixes all four at once — but
+    it makes detection content depend on out-of-band egress, which may not
+    be acceptable for the exercise.
+
+**Status:** OPEN. The pillar keys have not yet been identified.
 
 ### 9.16 Ad-hoc `ansible` on the controller needs `sudo`
 The tarball extracts as root, so `group_vars/all/vault.yml` is root-owned.
