@@ -7,7 +7,7 @@
 # to raw tc. Invoked from vyatta-postconfig-bootup.script; safe to run
 # repeatedly.
 #
-# Sources fingerprint: {{ (vyos_mirror_source_interfaces + [vyos_gre_tunnel_iface]) | join(',') }}
+# Sources fingerprint: {{ (vyos_mirror_source_interfaces + [vyos_gre_tunnel_iface] + (vyos_mirror_exclude_cidrs | default([]))) | join(',') }}
 
 LOG=/tmp/so-mirror-tc.log
 exec > >(tee -a "$LOG") 2>&1
@@ -39,6 +39,21 @@ if ! ip link show "$TUN" >/dev/null 2>&1; then
 fi
 ip link set "$TUN" up
 
+{% set excl = vyos_mirror_exclude_cidrs | default([]) %}
+{% if excl %}
+# Exclusions: {{ excl | join(', ') }}
+#
+# On several platforms the mgmt IP SHARES a data-plane interface (e.g.
+# PowerPlant's pp-corp-router carries 10.255.240.199 on the same eth0 as the
+# PP-Services gateway). A bare `matchall` mirror there would copy every
+# Ansible SSH/WinRM session into the sensor — out-of-band traffic that is
+# invisible in-scenario and would pollute detections.
+#
+# tc evaluates filters in priority order and `action pass` terminates the
+# chain, so a low-numbered pass rule per excluded CIDR short-circuits the
+# mirror before the catch-all is reached. src and dst are both matched
+# because a mirrored flow can have the excluded prefix on either end.
+{% endif %}
 {% for iface in vyos_mirror_source_interfaces %}
 # --- {{ iface }} ---
 if ! ip link show {{ iface }} >/dev/null 2>&1; then
@@ -47,12 +62,26 @@ else
   # Ingress mirror
   tc qdisc del dev {{ iface }} ingress 2>/dev/null
   run tc qdisc add dev {{ iface }} handle ffff: ingress
-  run tc filter add dev {{ iface }} parent ffff: matchall action mirred egress mirror dev $TUN
+{% set ns = namespace(prio=1) %}
+{% for cidr in excl %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} protocol ip u32 match ip src {{ cidr }} action pass
+{% set ns.prio = ns.prio + 1 %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} protocol ip u32 match ip dst {{ cidr }} action pass
+{% set ns.prio = ns.prio + 1 %}
+{% endfor %}
+  run tc filter add dev {{ iface }} parent ffff: prio {{ ns.prio }} matchall action mirred egress mirror dev $TUN
 
   # Egress mirror
   tc qdisc del dev {{ iface }} root 2>/dev/null
   run tc qdisc add dev {{ iface }} handle 1: root prio
-  run tc filter add dev {{ iface }} parent 1: matchall action mirred egress mirror dev $TUN
+{% set ns2 = namespace(prio=1) %}
+{% for cidr in excl %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} protocol ip u32 match ip src {{ cidr }} action pass
+{% set ns2.prio = ns2.prio + 1 %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} protocol ip u32 match ip dst {{ cidr }} action pass
+{% set ns2.prio = ns2.prio + 1 %}
+{% endfor %}
+  run tc filter add dev {{ iface }} parent 1: prio {{ ns2.prio }} matchall action mirred egress mirror dev $TUN
 fi
 
 {% endfor %}
