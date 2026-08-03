@@ -1,9 +1,13 @@
 # --- so-ansible additions ---
-retry/                         # Ansible retry files
+# Ansible retry files
+retry/
 *.retry
-*.iso                          # SO ISOs are 4-6 GB, staged by so_apt_mirror on ansible box
-.DS_Store                      # macOS Finder metadata
-files/setup-automation-source/*.iso   # belt-and-suspenders for the ISO ignore
+# SO ISOs are 4-6 GB, staged by so_apt_mirror on ansible box
+*.iso
+# macOS Finder metadata
+.DS_Store
+# belt-and-suspenders for the ISO ignore
+files/setup-automation-source/*.iso
 
 # --- Ansible vault password file (NEVER commit this) ---
 # The dev vault password lives in this file on both the mac dev machine
