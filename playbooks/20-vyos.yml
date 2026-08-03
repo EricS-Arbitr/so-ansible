@@ -28,8 +28,17 @@
 - name: VyOS mirror config on router-0 — Part B (tc script via ssh)
   hosts: net_vyos
   gather_facts: false
-  connection: ssh
   vars:
+    # ansible_connection as a play VAR, deliberately not the play's
+    # `connection:` keyword. A variable from inventory outranks the keyword,
+    # so in any range whose group_vars sets
+    # `ansible_connection: ansible.netcommon.network_cli` for VyOS hosts —
+    # which the customer's range-development-ansible does — the keyword form
+    # is silently ignored and these shell/file tasks run on the CONTROLLER
+    # instead of the router. Seen in PowerPlant 2026-08-03: all three routers
+    # reported the controller's own interfaces and aborted on "tun0 not
+    # present". This range does not set it, so the bug was invisible here.
+    ansible_connection: ssh
     # SSH into VyOS's underlying Debian; explicit interpreter because
     # VyOS's /usr/bin/python doesn't always exist.
     ansible_python_interpreter: /usr/bin/python3
