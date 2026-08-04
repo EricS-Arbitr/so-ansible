@@ -203,6 +203,13 @@ hostname to `127.0.1.1` (Debian convention), so local components resolving
 their own hostname already got a loopback answer. Adding `::1` does not
 introduce a new property.
 
+**Does salt own `/etc/hosts`? No — confirmed 2026-08-04.** This was the open
+risk when the fix landed, by analogy with `soc.json` and `iptables.jinja`. After
+phase 40 ran past several 15-minute highstate cycles, `grep "^::1" /etc/hosts`
+still showed `::1 ip6-localhost ip6-loopback so-manager` and the last 200 lines
+of the master log contained zero IPv6 warnings. `so_base`'s template is the sole
+owner of that file; no derived override is required.
+
 **Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
 `ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
 checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
