@@ -97,6 +97,72 @@ turn you change any entry's status.
 
 ---
 
+## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — pillar compilation dies, minions cannot authenticate
+
+**Symptom.** PowerPlant phase 40, `so_manager : Airgap — apply the soc state`
+failed all 20 retries across ~70 minutes:
+
+```
+salt-call state.apply soc
+stderr: Pillar timed out after 180 seconds
+```
+
+Meanwhile the stack looked perfectly healthy — `so-status` 14/14 containers up
+16 hours, load average 0.45, 12 GB RAM free.
+
+**Root cause.** `/opt/so/log/salt/master`, repeating every 2-5 seconds across
+every worker PID (1885, 1901, 1905, 1915, 1918):
+
+```
+Unable to find IPv6 record for "so-manager" causing a 0:00:10.010872 second
+timeout when rendering grains. Set the dns or /etc/hosts for IPv6 to clear this.
+```
+
+Salt's `ip_fqdn()` grain in `salt/grains/core.py` calls
+`getaddrinfo(<own fqdn>, AF_INET6)` on every grains render. `/etc/hosts` had
+only IPv4 entries for `so-manager`, so NSS `files` missed and the lookup fell
+through to `dns`. PowerPlant's resolver does not answer AAAA at all — not
+NXDOMAIN, no response — so each render cost the full 10-second resolver
+timeout. Every master worker was permanently inside a DNS timeout, so pillar
+compilation exceeded its 180s budget and the minion could not even
+authenticate (`Unable to sign_in to master: ... failed with timeout error`).
+
+**Why the dev range never saw it.** That range's resolver returns NXDOMAIN
+immediately, so the same lookup cost microseconds. This is a property of the
+range's DNS, not of SO — which makes it exactly the class of thing that
+ambushes a port.
+
+**Detection.** The IPv4 path never touches DNS, because `/etc/hosts` answers
+it. So a range can have completely broken DNS and only the IPv6 grain path
+suffers. Nothing else in the deploy complains.
+
+**Fix.** `roles/so_base/templates/hosts.j2` now puts the node's own hostname
+on the `::1` line:
+
+```
+::1     ip6-localhost ip6-loopback {{ so_hostname }}
+```
+
+This is what the salt warning itself recommends. Only the node's OWN hostname
+belongs there — putting peer SO nodes on `::1` would resolve grid traffic to
+loopback. Applies to all five SO nodes via the template.
+
+**Alternatives rejected.** Disabling IPv6 on the nodes also clears it —
+`ip_fqdn()` skips the lookup when `ip_addrs6()` is empty — but that touches
+every service on the box. Fixing the range resolver to answer AAAA means
+changing DNS infrastructure other plays depend on. The hosts entry is the
+smallest blast radius.
+
+**Note on existing behaviour.** `hosts.j2` already mapped the node's own
+hostname to `127.0.1.1` (Debian convention), so local components resolving
+their own hostname already got a loopback answer. Adding `::1` does not
+introduce a new property.
+
+**Status: PROPOSED** — fix is committed in both repos but has not yet been
+exercised. Verify by re-running phase 40 and confirming the master log stops
+emitting the IPv6 warning and `salt-call pillar.get global:airgap` returns
+promptly.
+
 ## 2026-08-03 · enhancement · Deploy-time internet fetches are a design error — target platforms have ZERO egress
 
 **Symptom.** Porting `so_apt_mirror` into `PowerPlant/ss-pp-ab`, phase 10

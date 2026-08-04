@@ -442,6 +442,30 @@ Python's `urllib` does not parse CIDRs in `no_proxy` — only literal names.
 `so_base` writes explicit per-host entries plus `127.0.0.1`. Without this,
 salt's internal HTTP probes go out through the corp proxy and time out.
 
+### 9.8b `/etc/hosts` also needs an IPv6 entry for the node's OWN hostname
+The single most expensive failure so far, and it looks nothing like DNS.
+Salt's `ip_fqdn()` grain runs `getaddrinfo(<own fqdn>, AF_INET6)` on every
+grains render, master and minion both. With no `::1` entry for the node's own
+hostname the lookup falls through to DNS, and a range whose resolver never
+answers AAAA turns each render into a 10-second timeout. The salt-master's
+workers saturate, pillar compilation blows its 180-second budget, and minions
+cannot authenticate — while `so-status` shows all 14 containers healthy and
+load sits at 0.4, so nothing looks wrong.
+
+The tell is in `/opt/so/log/salt/master`:
+
+```
+Unable to find IPv6 record for "so-manager" causing a 0:00:10.010872 second
+timeout when rendering grains. Set the dns or /etc/hosts for IPv6 to clear this.
+```
+
+repeating every few seconds across every worker PID. `so_base`'s `hosts.j2`
+now puts `{{ so_hostname }}` on the `::1` line. Only the node's own hostname —
+peers on `::1` would send grid traffic to loopback.
+
+The dev range never hit this because its resolver returns NXDOMAIN instantly.
+A range that blackholes AAAA (PowerPlant) hits it every time.
+
 ### 9.9 Verify the router's interface mapping on the live device
 Blueprint NIC order did not match VyOS `ethN` numbering on the dev range.
 Check `show interfaces` before setting `vyos_mirror_source_interfaces`.
