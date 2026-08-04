@@ -97,6 +97,66 @@ turn you change any entry's status.
 
 ---
 
+## 2026-08-03 · enhancement · Deploy-time internet fetches are a design error — target platforms have ZERO egress
+
+**Symptom.** Porting `so_apt_mirror` into `PowerPlant/ss-pp-ab`, phase 10
+failed staging the ETOPEN ruleset: the tarball was in so-ansible's `rules/`
+but was never copied into ss-pp-ab, so the copy task's `when:
+bundled_rules.stat.exists` gate skipped silently. The absence did not
+surface until phase 40, where `so_manager`'s airgap staging 404'd fetching
+it from the mirror — two phases and ~40 minutes downstream of the cause.
+
+**My first fix was wrong.** I added a `get_url` fallback that pulled the
+ruleset from `rules.emergingthreats.net` through the mgmt-plane proxy,
+reasoning that vendoring a second 5.5 MB binary into a second repo was
+untidy. Owner correction, 2026-08-03:
+
+> "The ETOPEN ruleset must be bundled in the tarball. When all is said and
+> done, these ranges may and will be deployed to platforms that do not have
+> external access via even proxy. The tarballs and repos will be moved to an
+> on-prem, in-platform solution such as nexus."
+
+**Detection.** The gate is the tell. `when: <thing>.stat.exists` on a task
+whose whole purpose is to place a required file converts "the input is
+missing" into "nothing to do," and the deploy carries on green until
+something far away needs the file.
+
+**Fix (both repos).** Bundling is now the only path.
+- Removed the `get_url` task and `so_etopen_upstream_url`
+  (so-ansible `bd87195`, reverting `dc826cd`).
+- Added `rules/emerging.rules.tar.gz` to ss-pp-ab and taught its
+  `build_tarball.sh` to stage `rules/` and list it in `TAR_PATHS`
+  (ss-pp-ab `96a874d`). Confirmed present inside `ab_pp.tgz`, now 5.6 MB.
+- Kept the presence check added alongside the bad fix, since that part was
+  right: `so_apt_mirror` now stats the file **on the mirror** after the copy
+  and fails there, with a message saying the file must be bundled and why.
+  Failure moved from phase 40 to phase 10.
+- The `.md5` sibling, HTTP smoke test and status report now key on actual
+  presence rather than on the bundled-source stat.
+
+**The standing constraint** (applies to all future work, without being
+re-asked): assume the target platform has **zero** egress. The dev range's
+`inet_proxy_addr` is a convenience of *that* range, not something to design
+around. Everything the deploy needs comes from the bundled tarball or an
+in-platform source (Nexus). "It is only fetched once" / "the proxy is
+available" are not justifications. Repo size is not a reason to avoid
+bundling.
+
+**Still non-compliant — deferred by owner 2026-08-03** ("we can address the
+remaining three once we get security onion working in the powerplant and
+airfield ranges"). All three currently need egress and will fail on a
+no-egress platform:
+1. `so_apt_mirror` git-clones the SO source at the pinned SHA from GitHub.
+2. `airgap_content.yml` clones `securityonion-resources`, `-yara` and
+   `-resources-playbooks` from GitHub.
+3. `so-setup` itself fetches from `packages.securityonion.net`, Docker,
+   Elastic and Ubuntu repos during install — SO's own behaviour, the
+   hardest of the three.
+
+**Status: VERIFIED** for the ETOPEN change — the ruleset is confirmed
+inside `ab_pp.tgz` by `tar -tzf`, and the download path no longer exists in
+either repo. Items 1–3 above are **OPEN**.
+
 ## 2026-07-30 · bug · Patching `soc.json` does not survive; SOC detection content needs in-range sources (IS-INET)
 
 **Symptom.** SOC Detections page: `ElastAlert: Sync Failed` and
