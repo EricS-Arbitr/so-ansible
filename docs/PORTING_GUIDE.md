@@ -564,6 +564,17 @@ Each actively misdirected debugging for hours.
 **When a check and a subsystem fail together, confirm the check is sound
 before treating it as evidence.**
 
+### 9.15b A check whose expected string is a SUBSTRING of the failure output
+`failed_when: "'0 packets captured' in pcap_out.stdout"` fires on
+`100 packets captured`, because that string contains it. The check failed
+precisely when the mirror was working. Its sibling in `verify_so.sh` expected
+`packets captured|packets received`, which tcpdump prints on every run
+including a zero capture — so it could never fail.
+
+Rule: assert on parsed values or exact lines (`in stdout_lines`), never with
+`in` against free-form command output. Numbers embedded in prose are the
+classic trap — `0` is a substring of `10`, `100`, `200`.
+
 ### 9.17 SOC's detection content needs the internet, every 5 minutes — and patching `soc.json` does NOT work
 
 **Symptom.** SOC's Detections page shows `ElastAlert: Sync Failed` and

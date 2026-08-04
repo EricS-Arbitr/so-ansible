@@ -248,9 +248,15 @@ check_sh so-sensor-1 \
 # Traffic-flow smoke: 5-sec tcpdump on tun0, expect >0 packets captured.
 # This is the money-shot check — GRE mirror is delivering + kernel is
 # decapping + Suricata/Zeek are actually seeing traffic.
+#
+# The expected pattern MUST require a non-zero leading digit. The previous
+# pattern was "packets captured|packets received", which tcpdump prints on
+# every run including "0 packets captured" — so the one check that proves the
+# entire mirror chain could never fail. Fourth instance of that family; see
+# UPSTREAM_FIXES 2026-08-04 (later 4) and PORTING_GUIDE 9.15.
 check_sh so-sensor-1 \
   "sudo timeout 5 tcpdump -i tun0 -c 10 -nn 2>&1 | tail -3" \
-  "packets captured|packets received" \
+  "[1-9][0-9]* packets captured" \
   "so-sensor-1: tun0 receiving mirrored packets from router-0"
 
 # =========================================================================
