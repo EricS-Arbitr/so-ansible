@@ -465,6 +465,16 @@ Python's `urllib` does not parse CIDRs in `no_proxy` — only literal names.
 `so_base` writes explicit per-host entries plus `127.0.0.1`. Without this,
 salt's internal HTTP probes go out through the corp proxy and time out.
 
+### 9.7b A too-short `async:` timeout destroys the install
+`async: N` does not just stop ansible waiting — the async wrapper TERMINATES
+the job at N seconds. `so_{manager,search,sensor}_install_timeout` all sit at
+`5400` (90 min) for that reason. so-setup routinely runs 45+ minutes and is
+range-dependent; PowerPlant killed a search node's so-setup at the old
+20-minute value, leaving it half-built with no salt key.
+
+Overshooting costs nothing — `async_status` returns as soon as the job
+finishes. Never tune these down to "what it took last time".
+
 ### 9.8b `/etc/hosts` also needs an IPv6 entry for the node's OWN hostname
 The single most expensive failure so far, and it looks nothing like DNS.
 Salt's `ip_fqdn()` grain runs `getaddrinfo(<own fqdn>, AF_INET6)` on every
