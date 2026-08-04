@@ -509,6 +509,27 @@ egresses the mirrored interface**, so it generates no mirrorable traffic.
 Target hosts *on* the monitored subnets. Unreachable targets are fine — the
 router still ARPs out that interface, and ARP is mirrored.
 
+### 9.10b The sensor's GRE `remote` must be the ROUTER's tunnel source
+Not the sensor's gateway, and not a literal. The kernel silently declines to
+decapsulate a GRE packet whose source address does not match the tunnel's
+`remote`, so `tun0` reads 0 packets forever while showing UP, PROMISC and a
+valid address. Meanwhile the router's TX counter climbs into the millions.
+
+`so_gre_remote_underlay` carries this per sensor and has **no default**. In the
+dev range the mirroring router was also the sensor's gateway, so
+`so_prod_gateway`, a hardcoded `172.16.5.1`, and the router's real GRE source
+were all the same address — three things agreeing by coincidence. Any range
+where the sensors do not hang off the mirroring router breaks all three at
+once.
+
+Check `ip -d link show tun0` on the sensor against `vyos_gre_source_ip` on its
+router. They must match exactly.
+
+Related: with more than one sensor, the derived `iptables.jinja` override is a
+single file on the manager, re-derived from stock on every write. A per-host
+rule there means the last sensor to run wins for the whole grid. The rule block
+must enumerate every sensor.
+
 ### 9.11 Windows clients: RTC-as-local-time breaks the SOC login
 **Symptom:** "This login form has expired", looping forever, InPrivate
 included, with no server-side error.

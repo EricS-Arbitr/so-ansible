@@ -25,6 +25,20 @@ so_prod_dns:
 so_gre_tunnel_local: "10.100.0.2"
 so_gre_tunnel_remote: "10.100.0.1"
 so_gre_tunnel_prefix: 30
+
+# The mirroring router's GRE endpoint -- the UNDERLAY remote, i.e. the source
+# address the encapsulated packets actually arrive from. Drives two things:
+#   * the netplan tunnel's `remote:` (kernel will not decapsulate unless this
+#     matches the sender exactly)
+#   * the sensor's SO firewall ACCEPT for proto 47
+#
+# PORTING TRAP: in the so-ansible dev range this value happened to EQUAL the
+# sensor's so_prod_gateway, because the mirroring router was also the sensor's
+# gateway. Both the firewall rule and the netplan template were written against
+# that coincidence. Here every sensor's gateway is 172.16.9.1 while the
+# mirroring routers are elsewhere entirely, so it must be stated explicitly.
+# There is deliberately NO default -- so_sensor fails loudly if it is unset.
+so_gre_remote_underlay: "172.16.5.1"   # router-0 vyos_gre_source_ip
 so_monitor_interface: "tun0"
 
 # --- network_interfaces for the `common` role (00-setup.yml) --------------
