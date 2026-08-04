@@ -136,8 +136,11 @@ Retries raised to 40 and re-scoped: they now cover an unreachable master, not
 a busy one. `PORTING_GUIDE` 9.7 rewritten to say so, including the warning not
 to tune retry counts against a highstate duration measured on one range.
 
-**Status: PROPOSED** — verify by re-running phase 40 and confirming the task
-either returns quickly or blocks and then succeeds, rather than failing in 7s.
+**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
+`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
+checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
+grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
+compilation and `state.apply` both worked.
 
 ## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — pillar compilation dies, minions cannot authenticate
 
@@ -200,10 +203,11 @@ hostname to `127.0.1.1` (Debian convention), so local components resolving
 their own hostname already got a loopback answer. Adding `::1` does not
 introduce a new property.
 
-**Status: PROPOSED** — fix is committed in both repos but has not yet been
-exercised. Verify by re-running phase 40 and confirming the master log stops
-emitting the IPv6 warning and `salt-call pillar.get global:airgap` returns
-promptly.
+**Status: VERIFIED** — PowerPlant phase 40 completed clean on 2026-08-04:
+`ok=34 changed=3 failed=0`. The airgap tasks passed their positive-proof
+checks (`salt-call pillar.get global:airgap` returned True, and `soc.json`
+grep found `/nsm/rules/suricata/etopen`), which is only reachable if pillar
+compilation and `state.apply` both worked.
 
 ## 2026-08-03 · enhancement · Deploy-time internet fetches are a design error — target platforms have ZERO egress
 
