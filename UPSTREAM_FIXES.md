@@ -97,6 +97,48 @@ turn you change any entry's status.
 
 ---
 
+## 2026-08-04 (later) · bug · Retrying a highstate lock is self-defeating — `state.apply` needs `queue=True`
+
+**Symptom.** With the IPv6 grain timeout fixed (previous entry), phase 40's
+`Airgap — apply the soc state` still failed all 20 retries, but in a totally
+different way — each attempt now took 7 seconds instead of 3m11s:
+
+```
+Data failed to compile:
+The function "state.highstate" is running as PID 1318939 and was started at with jid req
+```
+
+**Root cause — the retry loop was the bug.** SO's scheduler runs a highstate
+every 15 minutes, and salt refuses a concurrent `state.apply`. Because the
+refusal is *instant*, `retries: 20, delay: 30` is not a 10-minute wait for the
+highstate to clear — it is twenty instant failures spread over ~12 minutes of
+sleep. The comment in the role said "Highstates take ~5-8 min. Retry 20×30s =
+10 min ceiling", which was measured on the dev range. PowerPlant's manager
+takes longer, so the loop reliably ran out.
+
+This is a variant of the recurring lesson in this log: a guard that cannot
+achieve what it is waiting for. Retrying does not make the lock clear sooner.
+
+**Fix.** Salt has a first-class mechanism — `queue=True` holds the job until
+the running state finishes instead of erroring:
+
+```yaml
+ansible.builtin.command: salt-call state.apply soc queue=True
+```
+
+The call now BLOCKS, potentially 20+ minutes, which is what we actually want.
+Applied to all four `state.apply` call sites:
+- `so_manager/tasks/airgap_mode.yml:153` (soc)
+- `so_search/tasks/main.yml:291` (firewall)
+- `so_sensor/tasks/main.yml:75` and `:449` (firewall)
+
+Retries raised to 40 and re-scoped: they now cover an unreachable master, not
+a busy one. `PORTING_GUIDE` 9.7 rewritten to say so, including the warning not
+to tune retry counts against a highstate duration measured on one range.
+
+**Status: PROPOSED** — verify by re-running phase 40 and confirming the task
+either returns quickly or blocks and then succeeds, rather than failing in 7s.
+
 ## 2026-08-04 · platform · Salt master saturated by 10-second IPv6 DNS timeouts — pillar compilation dies, minions cannot authenticate
 
 **Symptom.** PowerPlant phase 40, `so_manager : Airgap — apply the soc state`

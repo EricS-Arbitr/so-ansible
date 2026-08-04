@@ -433,9 +433,32 @@ still holds the old key, so the new one lands in **Denied**.
 Hardcoding the wrong prefix produces `command not found` inside a retry
 loop that hides it for minutes.
 
-### 9.7 Highstate scheduler collisions
-The manager runs a highstate every 15 minutes with `maxrunning: 1`. Any
-delegated `state.apply` can collide. Every such task retries 20 × 30s.
+### 9.7 Highstate scheduler collisions — use `queue=True`, not more retries
+SO runs a highstate every 15 minutes. Any `salt-call state.apply` that fires
+mid-run is refused outright:
+
+```
+The function "state.highstate" is running as PID 1318939
+```
+
+The instinct is to retry, and that is wrong: the refusal is instant (~7s), so
+a retry loop burns its entire budget without ever waiting for the highstate to
+finish. On PowerPlant 2026-08-04 twenty retries at 30s emptied in ~12 minutes
+while the highstate was still running.
+
+Pass `queue=True` and salt holds the job until the running state completes:
+
+```yaml
+ansible.builtin.command: salt-call state.apply soc queue=True
+```
+
+The call then BLOCKS — possibly 20+ minutes on a busy manager — instead of
+failing. That is the desired behaviour. Retries stay only as cover for a
+genuinely unreachable master. All four `state.apply` call sites
+(`so_manager` airgap, `so_search` firewall, `so_sensor` firewall ×2) carry it.
+
+Highstate duration is range-dependent. Do not tune retry counts against a
+number measured on one range.
 
 ### 9.8 `/etc/hosts`, not DNS, and no_proxy needs names
 Python's `urllib` does not parse CIDRs in `no_proxy` — only literal names.
