@@ -419,6 +419,26 @@ correction) go **before** the idempotency probe; only expensive one-time
 install work goes after. Gate skips on positive proof of the end state,
 never on an exit code or a marker the same code path writes.
 
+### 9.4b Which side of the `end_host` probe does a task belong on?
+The rule, after seven instances of getting it wrong:
+
+**Above the probe** — anything asserting a fact that must hold for the node's
+whole lifetime. Firewall entries, tunnel definitions, pillar switches, and in
+particular anything held on a DIFFERENT host than the one being probed. A
+manager-side hostgroup entry is not made true by the sensor being installed.
+
+**Below the probe** — genuinely one-shot work: rendering an answer file,
+running `so-setup`, the post-install reboot.
+
+The sharpest test: *if this state were destroyed on a running range, would a
+re-run put it back?* If not, it is on the wrong side.
+
+Re-asserting an invariant every run must be CHEAP, or it will be moved back
+below the probe by the next person optimising a slow deploy. Gate the expensive
+follow-up (a queued `state.apply` can block 20+ minutes) on whether the cheap
+assertion actually changed anything — and gate on an EXIT CODE, not on
+`changed`, which couples you to a log string.
+
 ### 9.5 The master rejects a regenerated minion key
 **Symptom:** grid-join times out; `salt-key --list=unaccepted` is empty;
 `salt-minion` exits `77/NOPERM`.
