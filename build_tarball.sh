@@ -169,7 +169,22 @@ TAR_PATHS=(roles host_vars group_vars hosts site.yml playbooks deploy.sh)
 [ -f "pull-tarball.sh" ]  && TAR_PATHS+=(pull-tarball.sh)
 [ -d "files" ]            && TAR_PATHS+=(files)
 [ -d "rules" ]            && TAR_PATHS+=(rules)
-tar --no-xattrs -czf "$ARCHIVE" "${TAR_PATHS[@]}"
+# macOS junk, stripped from the whole stage before packing.
+find "$STAGE" \( -name '.DS_Store' -o -name '._*' \) -delete 2>/dev/null || true
+
+# COPYFILE_DISABLE=1 is load-bearing. Apple's tar emits an AppleDouble
+# "._name" companion for every file carrying an extended attribute, and
+# com.apple.provenance is set on anything downloaded. `--no-xattrs` does NOT
+# suppress them -- measured 2026-08-07: 2 junk members with --no-xattrs, 0 with
+# COPYFILE_DISABLE=1. ss-pp-ab shipped archives that were 50% AppleDouble
+# (942 members, 471 junk) until this was found, and extraction is ADDITIVE so
+# every one of those files persists in /etc/ansible.
+#
+# Apple's `tar -tzf` HIDES these members when listing, so macOS tar cannot be
+# used to verify this. Check with python3 tarfile instead.
+COPYFILE_DISABLE=1 tar --no-xattrs \
+  --exclude='.DS_Store' --exclude='._*' \
+  -czf "$ARCHIVE" "${TAR_PATHS[@]}"
 
 echo ""
 echo "=== Archive built ==="
