@@ -97,6 +97,32 @@ turn you change any entry's status.
 
 ---
 
+## 2026-08-07 · bug · build_tarball shipped ~50% AppleDouble junk; `--no-xattrs` never suppressed it
+
+Ported from ss-pp-ab, which had the identical defect. Apple's `tar` emits a
+`._name` AppleDouble companion for any file carrying an extended attribute, and
+`com.apple.provenance` is set on anything downloaded. ss-pp-ab's archive was
+942 members with 471 junk — one companion per real file, on every deploy since
+the project began.
+
+`--no-xattrs`, which both build scripts carried with a comment claiming it
+handled this, does nothing. Measured on a directory with one xattr'd file:
+plain tar 2 junk, `--no-xattrs` 2 junk, `COPYFILE_DISABLE=1` 0 junk.
+
+It hid because Apple's `tar -tzf` MERGES AppleDouble members back into xattrs
+when listing, so `tar -tzf | grep '\._'` on macOS reports 0 against an archive
+that is half junk. The check was not a proxy for its claim — the INSTRUMENT was
+incapable of observing it. **Verify archive contents with `python3 tarfile`,
+never with macOS tar.**
+
+Fixed with `COPYFILE_DISABLE=1`, `--exclude` for both patterns, and a
+whole-stage `find -delete`. Verified: 131 members, 0 junk.
+
+Also note `tar -xzf` is ADDITIVE on the target: junk shipped once persists in
+/etc/ansible, as does anything ever shipped then deleted.
+
+**Status: VERIFIED.**
+
 ## 2026-08-04 (later 4) · bug · The pcap check failed because the mirror WORKED — `'0 packets captured' in stdout` is a substring test
 
 **Symptom.** With the GRE fixes in, phase 60 still failed on all three
