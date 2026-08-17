@@ -94,3 +94,66 @@
     - name: report
       ansible.builtin.debug:
         msg: "{{ pcap_out.stdout }}"
+
+    # PACKETS ARRIVING IS NOT THE OUTCOME. It is the transport.
+    #
+    # Every check above this line passed for 42 hours while Zeek produced 66
+    # connection records in its entire lifetime and 23.5M packets arrived.
+    # The mirror was perfect; AF_PACKET could not parse an L3 gre tunnel's
+    # cooked frames and discarded 100% of them. Suricata reads cooked capture
+    # natively, so alerting worked and nothing looked wrong.
+    #
+    # Zeek's own counter is the honest signal -- it reports what it RECEIVED
+    # versus what it PROCESSED, and a high "not processed" percentage is the
+    # exact fingerprint of a capture/link-type mismatch.
+    - name: Zeek must be PROCESSING the mirror, not just receiving it
+      ansible.builtin.shell: |
+        set -o pipefail
+        f=/nsm/zeek/logs/current/conn.log
+        before=$(grep -vc '^#' "$f" 2>/dev/null || echo 0)
+        sleep 45
+        after=$(grep -vc '^#' "$f" 2>/dev/null || echo 0)
+        if [ "$after" -gt "$before" ]; then
+          echo "GROWING before=$before after=$after"
+        else
+          echo "STALLED before=$before after=$after"
+        fi
+      args:
+        executable: /bin/bash
+      register: zeek_conn
+      changed_when: false
+      failed_when: false
+      # The comparison happens IN BASH and Ansible only looks for a word.
+      # The first version compared two regex_search captures in a `until:`
+      # conditional, which failed on the controller with "Unknown argument"
+      # -- backslash handling differs between a YAML folded scalar and the
+      # double-quoted scalar it was tested in. Numbers extracted by Jinja
+      # across two escaping layers is a fragile way to ask "is it bigger".
+      until: "'GROWING' in zeek_conn.stdout"
+      retries: 4
+      delay: 20
+
+    - name: Fail if Zeek is receiving packets but logging no connections
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }}: conn.log is not growing
+          ({{ zeek_conn.stdout | default('no reading') | trim }}).
+
+          Packets ARE arriving -- the tcpdump above proved it. Zeek is
+          receiving them and producing nothing, which is a capture or
+          link-type mismatch, not a mirroring fault:
+
+            sudo tail -3 /nsm/zeek/spool/worker-1-1/stdout.log
+              -> "N packets received, M (100.00%) not processed" is the
+                 fingerprint. Near 100% means the capture method cannot read
+                 this interface's frames.
+
+            ip -d link show {{ so_monitor_interface }}
+              -> must report `gretap`. A plain `gre` device carries no
+                 Ethernet header, and SO runs Zeek as
+                 `-i af_packet::{{ so_monitor_interface }}`, which requires
+                 one. That combination discards 100% of frames silently.
+
+          Suricata is NOT evidence here -- it reads cooked capture natively
+          and keeps alerting while Zeek sees nothing.
+      when: "'GROWING' not in (zeek_conn.stdout | default(''))"

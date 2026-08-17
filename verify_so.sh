@@ -240,10 +240,18 @@ check_sh so-sensor-1 \
   "^active|active-container" \
   "so-sensor-1: Suricata running (systemd unit or so-suricata container)"
 
+# THE CONTAINER RUNNING IS NOT THE OUTCOME. This previously asserted only
+# that so-zeek was up -- which it was, continuously, for 42 hours while
+# discarding 100% of frames and producing 66 connection records total. Zeek
+# parsing nothing is not "unhealthy"; the container health check passes.
+#
+# conn.log having records is the honest signal, and because zeekctl rotates
+# it hourly, a non-zero count also means Zeek logged something in the CURRENT
+# hour rather than at some point in the past.
 check_sh so-sensor-1 \
-  "sudo docker ps --format '{{.Names}}' 2>&1 | grep -q '^so-zeek\$' && echo container-running" \
-  "container-running" \
-  "so-sensor-1: so-zeek container running"
+  "sudo grep -vc '^#' /nsm/zeek/logs/current/conn.log 2>/dev/null || echo 0" \
+  "^[1-9][0-9]*$" \
+  "so-sensor-1: Zeek is PROCESSING the mirror (conn.log has records)"
 
 # Traffic-flow smoke: 5-sec tcpdump on tun0, expect >0 packets captured.
 # This is the money-shot check — GRE mirror is delivering + kernel is

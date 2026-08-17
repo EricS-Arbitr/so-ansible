@@ -595,6 +595,58 @@ Rule: assert on parsed values or exact lines (`in stdout_lines`), never with
 `in` against free-form command output. Numbers embedded in prose are the
 classic trap — `0` is a substring of `10`, `100`, `200`.
 
+### 9.15c A mirror tunnel must be `gretap`, not `gre` — or Zeek parses nothing
+
+**The single most expensive defect in this project.** It shipped in this repo,
+was inherited by PowerPlant and airfield, and survived nine days of "green"
+deploys in all three.
+
+`tc ... action mirred egress mirror` copies complete ETHERNET FRAMES. A plain
+`gre` tunnel is L3 and carries IP only, so the kernel strips the L2 header and
+the sensor's `tun0` presents cooked-mode frames (`DLT_LINUX_SLL`). Zeek's
+AF_PACKET plugin — which SO uses, as `-i af_packet::tun0` with `lb_procs` —
+requires Ethernet and cannot parse them.
+
+Measured on airfield's soc-sensor-corp, same interface, same traffic, minutes
+apart:
+
+| capture | packets | not processed | conn records |
+|---|---|---|---|
+| `zeek -i tun0` (plain libpcap) | 5,390 | 0.37% | **583** |
+| `zeek -i af_packet::tun0` | 841 | **100.00%** | **0** |
+
+**Why nothing caught it, which is the part worth internalising:**
+
+- **Suricata reads cooked capture natively.** `eve.json` rotated hourly and
+  alerts flowed throughout, so the sensor looked alive from every angle.
+- **`60-verify` counted packets on `tun0`.** They were genuinely arriving. The
+  check measured the TRANSPORT and reported it as the OUTCOME.
+- **`verify_so.sh` asserted the so-zeek container was running.** It was —
+  continuously, for 42 hours, parsing nothing. Parsing nothing is not
+  "unhealthy".
+- **`capture_loss.log` showed `rcvd` climbing with drops flat.** Zeek was
+  receiving fine; that counter does not measure parsing.
+- Cluster logs (`broker`, `capture_loss`, `notice`) kept being written, and
+  all but `notice` are on SO's own shipper exclude list — so the dashboard
+  showed near-silence rather than absence.
+
+**Fix.** `gretap` on both ends, MTU 1462 (1500 − 20 IP − 4 GRE − 14 Ethernet).
+Plus removal of a stale L3 `gre` device before `netplan apply`, because link
+kind is fixed at creation and netplan will not convert one in place.
+
+**And the tunnel must stop moving before Zeek attaches.** netplan's renderer
+is NetworkManager, so `netplan apply` regenerates NM profiles and hands off;
+NM activates the tunnel on its own schedule. Restarting Zeek immediately after
+the apply binds it to a device NM is about to replace, leaving the workers
+RUNNING in `run_loop` reading an interface that no longer exists — while
+`so-status`, the container health check and `capture_loss` all still look
+healthy. Gate the restart on `tun0`'s ifindex being unchanged across a window.
+
+**Fix it at the tunnel, not by overriding SO's `node.cfg`** to force plain
+pcap. That keeps SO on its intended `af_packet` + fanout path, and follows the
+same principle as 9.17: make the environment match what SO expects rather than
+patching what SO renders.
+
 ### 9.17 SOC's detection content needs the internet, every 5 minutes — and patching `soc.json` does NOT work
 
 **Symptom.** SOC's Detections page shows `ElastAlert: Sync Failed` and

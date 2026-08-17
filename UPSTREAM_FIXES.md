@@ -95,7 +95,39 @@ turn you change any entry's status.
 | 2026-07-28 | so-soc sigma rules + AI summaries still can't git-clone github.com | OPEN (sub-item) |
 | 2026-07-22 | `platform_proxy` role adoption (tech debt, CLAUDE.md §5) | OPEN (deferred) |
 
----
+----
+
+## 2026-08-17 · bug · Mirror tunnel was `gre`, not `gretap` — Zeek discarded 100% of frames
+
+**Originated here and was inherited by PowerPlant and airfield.** Found on
+airfield 2026-08-14, fixed in both ranges the same day, ported back here
+2026-08-17. Full detail in PORTING_GUIDE 9.15c.
+
+`tc mirred` copies whole Ethernet frames; an L3 `gre` tunnel strips the L2
+header, so `tun0` presents cooked-mode frames that Zeek's AF_PACKET plugin
+cannot parse. Suricata reads cooked capture natively, which is why alerting
+worked and this stayed invisible.
+
+```
+zeek -i tun0             5390 pkts, 0.37% not processed, 583 conn records
+zeek -i af_packet::tun0   841 pkts,  100.00% NOT PROCESSED, 0 records
+```
+
+**Fixed:** `gretap` on both ends, MTU 1462, stale-`gre` removal before
+`netplan apply`, and an ifindex settle gate before restarting Zeek (netplan's
+renderer is NetworkManager and it re-activates the tunnel after the command
+returns).
+
+**Two checks in this repo were asserting the wrong thing and are now fixed:**
+`playbooks/60-verify.yml` counted packets on `tun0` and now also asserts
+`conn.log` is growing; `verify_so.sh` asserted the so-zeek container was
+running and now asserts `conn.log` has records. Because zeekctl rotates
+hourly, a non-zero count is also a freshness signal.
+
+**This is the fourth instance of the same family** (see 9.15, 9.15b): a check
+that measures the transport and reports it as the outcome.
+
+--
 
 ## 2026-08-07 · bug · build_tarball shipped ~50% AppleDouble junk; `--no-xattrs` never suppressed it
 
