@@ -100,7 +100,12 @@ to accept jammy (see §9.12). Other Ubuntu releases are untested here.
   internet, only a staged simulation (`RC-IS-INET`: unbound resolving
   arbitrary names to in-range IPs, plus mail/web). Do not assume in-game
   egress. Distinguish clearly:
-  - *install-time* fetches → mgmt-plane proxy, if the range has one;
+  - *install-time* fetches → mgmt-plane proxy. **Not optional for
+    `so_apt_mirror`**: it `git clone`s the SO source from GitHub, once per
+    pinned `so_git_ref`, and every SO node then fetches that tarball from the
+    mirror. No proxy means no mirror means nothing installs. A range without one
+    needs `so-source/securityonion-<sha12>.tar.gz` pre-seeded into
+    `so_mirror_root` by hand — the role's `stat` guard then skips the clone;
   - *runtime* fetches by SO containers (detection content) → must come
     from in-range sources. See §9.17.
 - **Monitored subnets** whose traffic you want captured, each gatewayed by

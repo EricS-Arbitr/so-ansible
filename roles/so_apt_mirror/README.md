@@ -2,13 +2,35 @@
 
 ## Description
 Stands up an HTTP mirror on the Ansible controller itself that serves every
-artifact the Security Onion nodes need during install. The range has no egress,
-so nothing may be fetched from the internet at install time — the controller
-fetches once through the management-plane proxy, and the SO nodes pull from it
-over plain HTTP on the production plane.
+artifact the Security Onion nodes need during install. **The SO nodes never
+reach the internet** — they pull everything from this mirror over the management
+plane.
 
-Serves the SO source tree at a pinned commit, the ETOPEN ruleset bundled in the
-tarball, and (when `75-endpoint.yml` is used) the Elastic Agent installers.
+Two sources fill it, and they are not the same kind of thing:
+
+| Artifact | Where it comes from |
+|----------|---------------------|
+| SO source tree | **`git clone` of `so_git_repo` from GitHub**, `depth: 1` at `so_git_ref`, tarred into `so-source/securityonion-<sha12>.tar.gz` |
+| ETOPEN ruleset | Copied from `/etc/ansible/rules/emerging.rules.tar.gz` — the so-ansible tarball's own top-level `rules/` directory |
+| Elastic Agent installers | Staged by `playbooks/75-endpoint.yml`, not by this role |
+
+## THE CONTROLLER NEEDS EGRESS TO GITHUB
+This is the single external dependency in an otherwise sealed build, and it is
+easy to miss because everything downstream of it looks airgapped.
+
+The clone runs through `so_mirror_proxy` (the management-plane proxy) and is
+gated on a `stat` of the target tarball, so it happens **once per pinned SHA**
+and never again. But on a fresh range with no working proxy, `so_apt_mirror`
+fails and every SO node fails behind it — `so_base` fetches the source from this
+mirror, so nothing installs.
+
+If a target range genuinely has no proxy, pre-seed
+`{{ so_mirror_root }}/so-source/securityonion-<sha12>.tar.gz` by hand before
+running the role. The `stat` guard will then skip the clone entirely.
+
+Note that `roles/so_apt_mirror/files/` does **not** exist and is not how any of
+this works. An empty directory of that name lingered in the working tree until
+2026-08-27; git never tracked it, and no task ever read it.
 
 **There is no ISO.** The role served a Security Onion airgap ISO until
 2026-07-21. `so-setup iso` is CentOS/Rocky/RHEL only and exits on Ubuntu telling
