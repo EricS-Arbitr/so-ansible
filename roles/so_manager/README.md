@@ -1,37 +1,98 @@
-# so_manager
+# so_manager Role
 
-Renders the `distributed-net-ubuntu-manager` answer file from the pinned
-snapshot, drops it into `/root/manager_setup/securityonion/setup/automation/`,
-runs `so-setup network <name>`, waits for the ~20-30 min install to
-complete, reboots, verifies `so-status`.
+## Description
+Installs the Security Onion **manager** node. Renders the
+`distributed-net-ubuntu-manager` answer file from inventory, runs
+`so-setup network`, waits out the 20–30 minute install, reboots under Ansible's
+control, and verifies the grid came up. Optionally applies Elastic Defend
+exclusions afterwards.
+
+Everything else in the grid joins *this* node, so it must complete before
+`so_search` or `so_sensor` run.
+
+## Variable Definition Location
+Range-wide values in **group_vars/all/main.yml**, secrets in
+**group_vars/all/vault.yml**, addressing in **host_vars/so-manager.yml**.
+
+## Required Variables
+
+### In group_vars/all/main.yml
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| so_setup_type | Yes | Install type passed to `so-setup` |
+| so_address_type | Yes | STATIC or DHCP; the range is static |
+| so_web_user | Yes | SOC web login |
+| so_web_access_type | Yes | How SOC is exposed |
+| so_nids | Yes | NIDS engine (Suricata) |
+| so_rule_set | Yes | Ruleset selection — ETOPEN for this range |
+| so_zeek_version | Yes | Zeek version SO installs |
+| so_manager_adv | Yes | Advanced-mode flag in the answer file |
+| so_subnet_security | Yes | Grid subnet permitted to reach the manager |
+| so_mirror_url / so_mirror_root | Yes | Mirror the airgap payload is staged from |
+| so_airgap_repos, so_airgap_etopen_dest, so_airgap_pillar_file | Yes | Airgap pillar wiring |
+| so_bundled_rules_filename | Yes | ETOPEN ruleset filename |
+
+### In group_vars/all/vault.yml
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| so_web_password | Yes | SOC web password (WEBPASSWD1/2) |
+| so_remote_password | Yes | SOREMOTEPASS1/2 — what makes grid acceptance automatic instead of a manual SOC click |
+
+### In host_vars/so-manager.yml
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| so_hostname | Yes | HOSTNAME in the answer file |
+| so_prod_ip, so_prod_prefix, so_prod_netmask, so_prod_gateway | Yes | MIP / MMASK / MGATEWAY |
+| so_prod_nic | Yes | Production interface name |
+| so_prod_dns | Yes | DNS servers, comma-joined into MDNS |
+
+## Optional Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| so_defend_exclusions | `[]` | Elastic Defend exclusions. Empty means the feature is off — the include is gated on length |
+| so_defend_filters_src / so_defend_filters_out | see group_vars | Where custom filters are read from and written to |
+| so_manager_install_timeout | see defaults | Async wait for `so-setup` |
+| so_manager_poll_interval | see defaults | How often completion is polled |
+| so_manager_answer_name | see defaults | Answer-file name under `setup/automation/` |
+| so_manager_setup_log / so_manager_setup_marker / so_manager_installed_marker | see defaults | Log and idempotency markers |
 
 ## Flow
 
-1. Precondition check: `so_base` ran (`/root/manager_setup/securityonion/setup/so-setup` exists) and the source tree is fresh.
-2. Render `manager.conf.j2` from group_vars + host_vars, save as
-   `/root/manager_setup/securityonion/setup/automation/so-ansible-manager`.
-3. Idempotency guard: if `/opt/so/state/installed` exists, skip so-setup
-   entirely (SO is already installed on this host).
-4. Invoke: `cd /root/manager_setup/securityonion/setup && sudo ./so-setup network so-ansible-manager`.
-   Streams to `/root/so-setup.log`. Uses `async` + `poll: 0` because the
-   install takes 20-30 min and we don't want a blocking Ansible SSH.
-5. Poll for completion (async_status) with generous timeout.
-6. Reboot handling: SO's own reboot is suppressed by setting
-   `SKIP_REBOOT=1` in the answer file, then this role's post-install
-   task issues an Ansible-managed reboot + wait_for_connection.
-7. Post-reboot verification: run `sudo so-status`, expect "STATUS: OK".
+1. Assert privilege, then probe whether SO is already installed. If it is, the
+   role ends early — but note the **lifetime invariants placed above that probe**
+   deliberately, so an already-installed node can still have manager-side state
+   repaired on a re-run.
+2. Stage the airgap payload and pillar from the mirror.
+3. Render the answer file into `setup/automation/`.
+4. Run `so-setup network <name>` with `async`, because the install far outlives
+   any reasonable SSH timeout. **A too-short `async:` destroys the install** —
+   see PORTING_GUIDE 9.7b.
+5. Poll for completion, reboot under Ansible control, wait for reconnection.
+6. Verify with `so-status`, asserting on an exact value rather than a substring
+   (PORTING_GUIDE 9.15b).
+7. Apply Defend exclusions if any are defined.
 
-## Variables that flow into the answer file
+## Gotchas
+`so-setup` **exits 0 on failure** (PORTING_GUIDE 9.3), so its return code proves
+nothing. Completion is judged by marker and status, never by rc.
 
-From group_vars/all.yml + so_all.yml + vault.yml:
+## Privilege
+Requires `become: true`, asserted in the first task.
 
-- `so_web_user` (WEBUSER), `so_web_password` (WEBPASSWD1/2 from vault)
-- `so_remote_password` (SOREMOTEPASS1/2 from vault)
-- `so_allow_subnets` (ALLOW_CIDR — comma-joined)
-- `so_nids`, `so_zeek_version`, `so_rule_set`, `so_manager_adv`
+## Complete Example Configuration
 
-From host_vars/so-manager.yml:
-
-- `so_hostname` (HOSTNAME)
-- `so_prod_ip` / `so_prod_prefix` / `so_prod_gateway` (MIP/MMASK/MGATEWAY)
-- `so_prod_dns` (MDNS — comma-joined)
+### host_vars/so-manager.yml
+```yaml
+so_hostname: "so-manager"
+so_prod_nic: "eth1"
+so_prod_ip: "172.16.9.30"
+so_prod_prefix: 24
+so_prod_netmask: "255.255.255.0"
+so_prod_gateway: "172.16.9.1"
+so_prod_dns:
+  - "172.16.2.7"
+```

@@ -1,6 +1,30 @@
 ---
 # LIFETIME INVARIANT — must precede the `meta: end_host` probe below, or an
 # already-installed sensor can never reach it (the recurring trap in this repo).
+- name: Preflight — confirm this role is running with escalated privilege
+  ansible.builtin.command: id -u
+  register: _role_euid
+  changed_when: false
+
+# so_sensor carries no task-level `become`: it relies entirely on the calling
+# play supplying `become: true`. That contract is invisible until a task
+# fails on a permission error somewhere in the middle, which is an expensive
+# way to learn it -- on this project every such discovery costs a
+# build/upload/deploy round trip through a web console.
+#
+# Two `become` mistakes on 2026-08-04/05 came from exactly this ambiguity:
+# a play-level become that broke an unprivileged chmod, then removing it
+# entirely and breaking a privileged remote read. State the requirement and
+# fail on it immediately.
+- name: Fail immediately if so_sensor was invoked without become
+  ansible.builtin.fail:
+    msg: >-
+      so_sensor requires privilege escalation but is running as uid
+      {{ _role_euid.stdout | trim }}. Add `become: true` to the play that
+      invokes it. Every task in this role assumes root; without it you get a
+      permission error partway through, in a task that looks unrelated.
+  when: (_role_euid.stdout | trim) != '0'
+
 - name: Preflight — so_gre_remote_underlay must be set for this sensor
   ansible.builtin.fail:
     msg: |
@@ -58,6 +82,21 @@
   become: true
   register: so_stock_ipt
 
+- name: GRE firewall — fail loudly if the FORWARD anchor is gone (SO upgraded)
+  ansible.builtin.fail:
+    msg: |
+      Cannot place the tun0 FORWARD drop: anchor '{{ so_tun_forward_anchor }}'
+      not found in SO's iptables.jinja.
+
+      Without it the sensor forwards mirrored traffic, SO's FORWARD reject
+      fires, and the sensor emits ICMP unreachables to hosts across the range
+      from its own prod IP -- telling workstations that Splunk and the DCs are
+      unreachable. A passive sensor must not generate traffic.
+
+      Re-derive the anchor from the current template and update
+      so_tun_forward_anchor.
+  when: so_tun_forward_anchor not in (so_stock_ipt.content | b64decode)
+
 - name: GRE firewall — fail loudly if the anchor line is gone (SO upgraded)
   ansible.builtin.fail:
     msg: |
@@ -72,7 +111,10 @@
   ansible.builtin.copy:
     # Single-line form on purpose — a `|` block scalar would re-indent and
     # newline-pad the rendered file.
-    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) }}"
+    # Two injections, both ahead of their anchors: GRE accepts into INPUT, and
+    # a DROP for mirrored traffic into FORWARD. Chained replaces on one
+    # expression so the file is written once.
+    content: "{{ (so_stock_ipt.content | b64decode) | replace(so_gre_anchor, so_gre_rule_block + so_gre_anchor) | replace(so_tun_forward_anchor, so_tun_forward_rule + so_tun_forward_anchor) }}"
     dest: /opt/so/saltstack/local/salt/firewall/iptables.jinja
     owner: socore
     group: socore
@@ -112,6 +154,15 @@
   changed_when: false
   register: ipt_syntax
   failed_when: ipt_syntax.rc != 0
+  when: so_grid_member.stat.exists
+
+- name: GRE firewall — verify the tun0 FORWARD drop is in the running ruleset
+  ansible.builtin.shell: |
+    iptables -S FORWARD | grep -E -- "-A FORWARD -i {{ so_monitor_interface }} -j DROP"
+  become: true
+  changed_when: false
+  register: tun_drop_check
+  failed_when: tun_drop_check.rc != 0
   when: so_grid_member.stat.exists
 
 - name: GRE firewall — verify proto 47 is now accepted in INPUT
@@ -170,6 +221,7 @@
   when: netplan_tun.changed or (stale_tun is changed)
 
 
+
 - name: Wait for {{ so_monitor_interface }} to appear
   ansible.builtin.wait_for:
     path: "/sys/class/net/{{ so_monitor_interface }}"
@@ -179,11 +231,21 @@
   ansible.builtin.command: "ip link set dev {{ so_monitor_interface }} promisc on"
   changed_when: false
 
-- name: Verify tunnel is up
+# `'UP' not in stdout` passes on the LOWER_UP flag, on UNKNOWN state text, and
+# on any future field containing those two letters -- it is a substring test
+# against free-form output (PORTING_GUIDE 9.15b). GRE tunnels report state
+# UNKNOWN, never UP, so the old check was passing purely on the flag list.
+# Assert on the flag list explicitly, which is what actually matters: the
+# interface is administratively up and the carrier is present.
+- name: Verify the tunnel interface is administratively up with carrier
   ansible.builtin.command: "ip -brief link show {{ so_monitor_interface }}"
   register: tun_state
   changed_when: false
-  failed_when: "'UP' not in tun_state.stdout"
+  # `[<,]UP[,>]` matches UP as a whole token in the flag list and does NOT
+  # match LOWER_UP, where the preceding character is an underscore.
+  failed_when: >-
+    tun_state.stdout is not search('[<,]UP[,>]')
+    or 'LOWER_UP' not in tun_state.stdout
 
 # "UP" is not proof. PowerPlant 2026-08-04: tun0 was UP, PROMISC and carried a
 # valid /30 while RX sat at 0 packets, because the tunnel's remote pointed at
@@ -254,9 +316,49 @@
   failed_when:
     - zeek_restart.rc != 0
     - "'command not found' not in (zeek_restart.stderr | default(''))"
+
 - name: Report tunnel state
   ansible.builtin.debug:
     msg: "{{ so_monitor_interface }}: {{ tun_state.stdout }}"
+
+# --- LIFETIME INVARIANT: this node's entry in the manager's firewall -------
+# Moved above the `meta: end_host` probe 2026-08-05 (structural pass 3/5).
+#
+# This is MANAGER-SIDE state, not node-side. The node being installed says
+# nothing about whether the manager still lists it: a rebuilt manager, a
+# restored pillar, or a hand-edited hostgroup all leave an installed node
+# permanently unable to reach salt on 4505/4506, and the old ordering meant
+# a re-run could never repair it -- the play ended at the probe first.
+#
+# Cheap on re-runs: `so-firewall includehost` reports "already exists" (rc=3)
+# and is not `changed`, so the expensive apply below is skipped entirely.
+- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
+  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_add
+  changed_when: "'Successfully added' in fw_add.stdout"
+  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
+  failed_when:
+    - fw_add.rc != 0
+    - "'already exists' not in fw_add.stderr"
+
+- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
+  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
+  delegate_to: "{{ groups['so_manager'][0] }}"
+  become: true
+  register: fw_apply
+  changed_when: fw_apply.rc == 0
+  # Highstate scheduler retry logic (see so_search for full rationale).
+  until: fw_apply.rc == 0
+  retries: 40
+  delay: 30
+  # Gate on the EXIT CODE, not on `changed`. rc=0 means the entry was added;
+  # rc=3 is "already exists". Keying off `changed` would couple this to
+  # `changed_when`'s stdout string-match, so a reworded so-firewall message
+  # would silently skip the apply on a FRESH node and leave 4505/4506 shut --
+  # the failure would surface much later as a grid join that never completes.
+  when: fw_add.rc == 0
 
 - name: Idempotency probe
   ansible.builtin.stat:
@@ -546,28 +648,6 @@
 # override sensor.interface from the default 'bond0' to
 # {{ so_monitor_interface }} (tun0 on our GRE-mirror setup) — else
 # suricata + zeek would bind to a phantom bond0 and capture 0 packets.
-
-- name: Grid join — on manager, add this node's IP to sensor firewall hostgroup
-  ansible.builtin.command: "sudo /usr/sbin/so-firewall includehost sensor {{ so_prod_ip }}"
-  delegate_to: "{{ groups['so_manager'][0] }}"
-  become: true
-  register: fw_add
-  changed_when: "'Successfully added' in fw_add.stdout"
-  # so-firewall returns rc=3 with "WARNING - IP already exists" on repeated adds. Idempotent, not a failure.
-  failed_when:
-    - fw_add.rc != 0
-    - "'already exists' not in fw_add.stderr"
-
-- name: Grid join — on manager, apply firewall state (opens 4505/4506 for this node)
-  ansible.builtin.command: sudo salt-call state.apply firewall queue=True
-  delegate_to: "{{ groups['so_manager'][0] }}"
-  become: true
-  register: fw_apply
-  changed_when: fw_apply.rc == 0
-  # Highstate scheduler retry logic (see so_search for full rationale).
-  until: fw_apply.rc == 0
-  retries: 40
-  delay: 30
 
 - name: Grid join — preflight, confirm salt-key is invokable on manager
   ansible.builtin.command: "sudo salt-key --version"

@@ -22,5 +22,6 @@ network:
         - {{ so_gre_tunnel_local }}/{{ so_gre_tunnel_prefix }}
       # 1500 - 20 (outer IP) - 4 (GRE) - 14 (inner Ethernet). 14 bytes less
       # than the L3 gre tunnel this replaced, because the frame now carries
-      # its L2 header.
+      # its L2 header. SO's pillar asks for mtu 9000 -- it expects a
+      # jumbo-capable monitor path, which a 1500-byte underlay cannot give.
       mtu: 1462

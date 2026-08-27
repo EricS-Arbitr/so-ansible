@@ -250,8 +250,24 @@ so_manager_ip:       "172.16.5.10"
 so_manager_hostname: "so-manager"
 
 so_mirror_host:      "10.255.240.157"  # the controller's mgmt IP
+so_mirror_root:      /var/www/so-mirror
 so_upstream_proxy:   "http://10.255.240.1:3128"
+
+# Endpoint enrolment (playbooks/75-endpoint.yml + elastic_agent)
+so_agent_installer_windows: "so-elastic-agent_windows_amd64"
+so_agent_installer_linux:   "so-elastic-agent_linux_amd64"
+
+# Elastic Defend exclusions (so_manager). Empty = feature off; the include is
+# gated on list length, so a range opts in without editing the role.
+so_defend_exclusions: []
+so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
+so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
 ```
+
+`so_mirror_root` lives here rather than in `so_apt_mirror/defaults/` because
+`75-endpoint.yml` stages installers into that path **without including the
+role**, and a role default is role-scoped — it would silently resolve to nothing
+there. One source of truth, visible to every play.
 
 The `so_subnet_*` names are dev-range specific. For a different range,
 rename them to match its subnets and update every reference — they are used
@@ -323,7 +339,20 @@ The last two are needed by the copied `common` role — `win_psmodule` /
 ### 7.1 Roles
 
 **Authored here:** `so_apt_mirror`, `so_base`, `so_manager`, `so_search`,
-`so_sensor`, `vyos_mirror`.
+`so_sensor`, `vyos_mirror`, `elastic_agent`.
+
+`elastic_agent` enrols range endpoints into SO's Fleet and is driven by
+`playbooks/75-endpoint.yml`, which site.yml does NOT import — building the grid
+and enrolling endpoints are separate decisions per range. It was ported from
+ss-pp-so on 2026-08-27 along with three of that playbook's six plays; the two
+Sysmon plays were left behind as endpoint posture rather than Security Onion,
+and they depend on a `sysmon` role this repo does not carry.
+
+**Every role here requires `become: true` from the calling play**, and each one
+asserts it in its first task. The roles carry no task-level `become`, so
+without the assertion the contract is invisible until something fails on a
+permission error partway through, in a task that looks unrelated. Two such
+mistakes on 2026-08-04/05 came from exactly that ambiguity.
 
 **Copied** from `airfield-range/roles/` per the COPY-don't-reference policy:
 `common`, `init`, `handlers`. `handlers` is a hard dependency of `common`
@@ -647,6 +676,12 @@ pcap. That keeps SO on its intended `af_packet` + fanout path, and follows the
 same principle as 9.17: make the environment match what SO expects rather than
 patching what SO renders.
 
+### 9.16 Ad-hoc `ansible` on the controller needs `sudo`
+The tarball extracts as root, so `group_vars/all/vault.yml` is root-owned.
+`deploy.sh` works only because it is run with sudo.
+
+---
+
 ### 9.17 SOC's detection content needs the internet, every 5 minutes — and patching `soc.json` does NOT work
 
 **Symptom.** SOC's Detections page shows `ElastAlert: Sync Failed` and
@@ -687,11 +722,55 @@ runtime fetches must be served in-range:
 
 **Status:** OPEN. The pillar keys have not yet been identified.
 
-### 9.16 Ad-hoc `ansible` on the controller needs `sudo`
-The tarball extracts as root, so `group_vars/all/vault.yml` is root-owned.
-`deploy.sh` works only because it is run with sudo.
+### 9.18 A forged gateway ARP entry cuts Windows hosts off — and it answers ICMP
 
----
+Not a Security Onion fault, but it will strand a range you are porting to, and
+it cost two full deploys before it was identified.
+
+One MAC, `00:50:56:98:7D:D7`, answers ARP for the **default-gateway address** on
+whatever segment it appears on. Observed on four subnets across two independent
+ranges:
+
+```
+2026-08-25  pp-dc03 (Server 2019)   192.168.100.1 -> 98:7D:D7   real router A8:30:DC
+2026-08-27  win-hunt-1..6 (Win 10)    172.16.9.1  -> 98:7D:D7   real router A8:88:90
+```
+
+**It answers ICMP.** The gateway pings, so every check that stops at "can I
+reach my gateway" reports healthy while nothing routes off-subnet. Symptoms
+present as DNS failures, domain-join failures and Fleet enrolment failures,
+which is why it was misdiagnosed twice — first as DNS, then as congestion from
+the traffic mirror.
+
+**Windows only.** Linux on the same wire is unaffected: it ignores unsolicited
+ARP for an address it did not ask about (`arp_accept=0`), while Windows accepts
+the reply and overwrites its cache. Not version-specific — confirmed on Server
+2019 and Windows 10. The SO nodes themselves are Linux and immune, so a grid can
+look perfectly healthy while every Windows endpoint it is meant to monitor is
+unreachable.
+
+**How to see it:** compare the host's neighbour entry against the router's own
+MAC, taken from the router rather than from ARP.
+
+```
+# on the Windows host
+Get-NetNeighbor -IPAddress <gateway> | Select LinkLayerAddress
+# on the router, ground truth
+show interfaces ethernet ethN        # VyOS
+```
+
+A mismatch is the fault. The router will also show that host's own ARP entry
+going STALE, because it never receives a packet.
+
+**Remedy:** flush the entry — `Remove-NetNeighbor -IPAddress <gateway>` — and it
+re-learns correctly and stays correct. A stale entry is planted once at boot and
+persists because Windows never re-ARPs an entry it still considers valid, so a
+flush is durable and a permanent static entry is unnecessary risk. The range
+repos do this in `roles/init` before anything needs to leave the subnet.
+
+Report it to the platform vendor. `:98:` is a different VMware MAC block from
+every real router interface (`:A8:`), and it recurs across independent ranges,
+so only they can remove the cause.
 
 ## 10. Upgrading Security Onion
 
