@@ -182,16 +182,33 @@ so_hostname: "so-manager"             # becomes the OS hostname + salt minion id
 so_prod_ip: "172.16.5.10"             # in-game IP on the security subnet
 so_prod_prefix: 24
 so_prod_gateway: "172.16.5.1"
-so_prod_dns:
-  - "10.255.240.157"
+so_prod_dns:                          # IN-GAME resolver — never a mgmt address
+  - "172.16.7.7"
 
 network_interfaces:                   # consumed by the `common` role
   - name: "eth0"
     ipv4: { type: "ethernet", address: "10.255.240.100", netmask: "255.255.240.0", gateway: "" }
   - name: "eth1"
     ipv4: { type: "ethernet", address: "172.16.5.10", netmask: "255.255.255.0", gateway: "172.16.5.1" }
-    dns: ["10.255.240.157"]
+    dns: ["172.16.7.7"]             # same in-game resolver as so_prod_dns
 ```
+
+**`so_prod_dns` must be an in-game address.** It is rendered into the answer
+file as `MDNS` and into the node's netplan, so it is what the node uses for
+every name it cannot already find in `/etc/hosts`. Pointing it at the
+management plane — the Ansible controller is the tempting choice, because it is
+reachable and already serves the mirror — sends in-game resolution
+out-of-band, and the controller runs nginx, not a resolver.
+
+This is easy to get wrong and hard to notice: `so_base` writes explicit
+`/etc/hosts` entries for every peer (§9.8), so the grid installs and runs
+perfectly with a DNS value that answers nothing. so-ansible's own host_vars
+carried the controller's mgmt IP here until 2026-08-27 for exactly that reason.
+A wrong value is inert until something outside `/etc/hosts` needs resolving,
+and then it fails somewhere unrelated.
+
+Use whatever the range's in-game DNS actually is — `172.16.2.7` (a DC) in
+ss-pp-so, `172.16.7.7` (DC01) in this repo's dev range.
 
 **`so_role` values are not arbitrary** — they become the salt minion id
 (`<so_hostname>_<so_role>`) and must match what `so-setup` registers.

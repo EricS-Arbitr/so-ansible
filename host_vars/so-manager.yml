@@ -12,8 +12,25 @@ so_hostname: "so-manager"
 so_prod_ip: "172.16.5.10"
 so_prod_prefix: 24
 so_prod_gateway: "172.16.5.1"
+# In-game DNS, NOT the management plane. Corrected 2026-08-27: this was
+# 10.255.240.157, the Ansible controller's mgmt address, chosen because it was
+# a conveniently reachable box rather than because it answers DNS -- it runs
+# nginx for the mirror and no resolver at all. It reaches so-setup as MDNS and
+# lands in the node's netplan, so every name lookup not already in /etc/hosts
+# was being aimed at the management plane.
+#
+# It never broke anything, which is exactly why it survived: so_base writes
+# explicit /etc/hosts entries for every peer (PORTING_GUIDE 9.8), so the grid
+# never needs a resolver. The value was inert AND wrong.
+#
+# 172.16.7.7 is DC01's production address on the Services subnet -- this dev
+# range's only in-game DNS candidate. NOTE that nothing in this repo promotes
+# DC01 or installs a DNS role on it (AD promotion is out of scope, see the
+# comment on [windows] in ./hosts), so it does not answer today either. The
+# difference is that it is the right ADDRESS ON THE RIGHT PLANE, and it starts
+# working the day DC01 is promoted, whereas the controller never will.
 so_prod_dns:
-  - "10.255.240.157"   # ansible controller (also our local mirror)
+  - "172.16.7.7"
 
 # --- network_interfaces for the `common` role (00-setup.yml) --------------
 # Added 2026-07-29. Schema is fixed by common/tasks/linux.yml, which feeds
@@ -37,4 +54,4 @@ network_interfaces:
       netmask: "255.255.255.0"
       gateway: "172.16.5.1"
     dns:
-      - "10.255.240.157"                    # ansible controller (also the SO mirror)
+      - "172.16.7.7"   # in-game (DC01), not the mgmt plane
