@@ -24,6 +24,7 @@ table. Everything below is orientation; that document is the procedure.
 | Document | Read it when |
 |---|---|
 | [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md) | **Start here.** Adding Security Onion to a range — step by step, no prior knowledge assumed. |
+| [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) | You want the reasoning, measurements and failure history behind a rule, or hit something the build guide does not cover. |
 | `roles/<role>/README.md` | Variables and behaviour for one role. |
 | [UPSTREAM_FIXES.md](UPSTREAM_FIXES.md) | Something broke. Every issue with Symptom → Detection → Fix → Status. |
 | [PROJECT_LOG.md](PROJECT_LOG.md) | What changed when, and why. |
