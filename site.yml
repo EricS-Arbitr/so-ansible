@@ -10,9 +10,10 @@
 #   50-nodes      so-setup SEARCH + SENSOR (idempotent existing-deployment)
 #   60-verify     end-to-end checks (so-status, elastic health, sensor pcap)
 #
-# Windows / elastic-agent enrollment lives in a separate playbook
-# (playbooks/70-elastic-agents.yml) — run only after decision to bring
-# Windows into scope (currently DEFERRED per project_so_architecture_decisions).
+# Endpoint (Windows/Linux) Elastic Agent enrollment lives in
+# playbooks/75-endpoint.yml, deliberately NOT imported here: building the grid
+# and enrolling endpoints are separate decisions per range. Run it explicitly.
+#   ansible-playbook -i hosts playbooks/75-endpoint.yml
 # =========================================================================
 
 - import_playbook: playbooks/00-setup.yml

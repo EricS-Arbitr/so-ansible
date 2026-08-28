@@ -1,5 +1,12 @@
 # so-ansible — Porting Guide
 
+> **Implementing this in a new range for the first time?** Start with
+> [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) — a step-by-step build
+> guide that assumes no knowledge of this project. This document is the
+> reference behind it: the same ground with the measurements, incidents and
+> rationale that produced each rule. Come here when you want to know *why*, or
+> when something fails in a way the build guide does not cover.
+
 **Purpose.** Deploy a distributed Security Onion 2.4.x cluster (manager +
 search + sensor) unattended via Ansible into an arbitrary virtual range.
 
@@ -218,10 +225,15 @@ Verified working: `manager`, `searchnode`, `sensor`.
 
 ```yaml
 so_gre_tunnel_local: "10.100.0.2"     # sensor end of the GRE tunnel
-so_gre_tunnel_remote: "10.100.0.1"    # router end
 so_gre_tunnel_prefix: 30
 so_monitor_interface: "tun0"          # what Suricata/Zeek bind to
+so_gre_remote_underlay: "172.16.5.1"  # the ROUTER'S TUNNEL SOURCE address
 ```
+
+`so_gre_tunnel_remote` used to be listed here and is **not required** — no
+template or task reads it. The live sensor host_vars still set it; it is inert.
+The variable the sensor genuinely needs alongside the tunnel address is
+`so_gre_remote_underlay`, which must equal the router's `vyos_gre_source_ip`.
 
 The tunnel addresses are arbitrary internal /30s — they only need to be
 unused in the range and to match the router's `vyos_gre_*` values.
