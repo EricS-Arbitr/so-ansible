@@ -56,8 +56,15 @@
 # is absent on the device (blueprint NIC order does not always match ethN,
 # PORTING_GUIDE 9.9), so a silent partial mirror is a real outcome, and the
 # sensor's pcap check would still pass on traffic from the one working link.
+# ABSOLUTE PATH, NOT bare `tc`. On VyOS the vyos user's non-login PATH does not
+# include /sbin, so `tc` resolves to "command not found". Piped through a
+# counting grep that produces 0 -- indistinguishable from "no filters exist".
+# On 2026-09-01 that read as a completely absent mirror on all three routers
+# and cost most of an investigation before the log showed "tc rules applied
+# for 5 interfaces". A check whose failure mode is identical to the condition
+# it tests for is not a check.
 - name: Verify tc mirror filters exist on EVERY source interface
-  ansible.builtin.command: "tc filter show dev {{ item }} ingress"
+  ansible.builtin.command: "/sbin/tc filter show dev {{ item }} ingress"
   become: true
   register: tc_verify
   changed_when: false
