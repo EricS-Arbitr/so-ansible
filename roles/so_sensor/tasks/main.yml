@@ -658,16 +658,59 @@
   # swallowed by the 30×10s `until` loop below — it retries a hard
   # "command not found" for a full 5 min before surfacing the real error.
 
-- name: Grid join — wait for this node's salt-key to appear in Unaccepted on master
+# WAITS FOR THE END STATE, NOT FOR ONE PARTICULAR ROUTE TO IT.
+#
+# This used to poll `salt-key --list=unaccepted` and wait for the key to show
+# up there. That is only correct on a FIRST install, where the key really does
+# pass through Unaccepted on its way to Accepted. A node that is ALREADY a grid
+# member never enters Unaccepted -- it reconnects with the accepted key it
+# already holds -- so the gate waited 30 x 10s for a transition that could not
+# happen, and failed a node that was perfectly healthy.
+#
+# ss-pp-so 2026-09-03: so-sensor-ot and so-sensor-edge failed here with
+# `stdout: "Unaccepted Keys:"`, an EMPTY list, while both keys sat in Accepted
+# on the master and both nodes were serving traffic with Zeek and Suricata up
+# and green. The reboot above carries no `when:` guard so it runs even when
+# so_setup_can_skip is true, while the stale-key delete DOES carry that guard
+# and is skipped -- so on a re-run against a working grid the key is
+# deliberately left in place, and then this gate demanded to see it somewhere
+# it could never be.
+#
+# The task immediately below already tolerates exactly this case:
+#     'does not match any unaccepted keys' not in so_min_add.stdout
+# The gate was therefore strictly stricter than the step it exists to protect.
+# When a gate and the operation behind it disagree about what counts as ready,
+# the gate is the one that is wrong.
+#
+# Now: proceed as soon as the master KNOWS this key, in either state.
+# so-minion -o=add accepts it when unaccepted and no-ops when already accepted.
+# A genuinely fresh minion that has not authenticated yet is still absent from
+# both lists, so the wait this task exists for is preserved.
+#
+# Accepted and Unaccepted are queried SEPARATELY and matched with `grep -qxF`
+# rather than reading `--list=all`: that also prints the Rejected and Denied
+# sections, so a substring test against it would pass on a REJECTED key -- the
+# state (later 6) records as unrepairable -- and a whole-line match stops one
+# minion id from matching inside another.
+- name: Grid join — wait for this node's salt-key to reach the master
   # Invoked bare (not /usr/sbin/salt-key). SO ships its OWN helpers in
   # /usr/sbin (so-firewall, so-minion), but salt's binaries come from the
   # Salt onedir package and land in /usr/bin. sudo's secure_path covers
   # them — `sudo salt-call` above already proves that.
-  ansible.builtin.command: "sudo salt-key --list=unaccepted --no-color"
+  ansible.builtin.shell: |
+    key="{{ inventory_hostname }}_{{ so_role }}"
+    un=$(sudo salt-key --list=unaccepted --no-color | sed 's/^[[:space:]]*//')
+    ac=$(sudo salt-key --list=accepted   --no-color | sed 's/^[[:space:]]*//')
+    printf 'unaccepted:\n%s\naccepted:\n%s\n' "$un" "$ac"
+    if printf '%s\n%s\n' "$un" "$ac" | grep -qxF "$key"; then
+      echo "GRIDKEY_PRESENT"
+    else
+      echo "GRIDKEY_ABSENT"
+    fi
   delegate_to: "{{ groups['so_manager'][0] }}"
   become: true
   register: pending_keys
-  until: (inventory_hostname + '_' + so_role) in pending_keys.stdout
+  until: "'GRIDKEY_PRESENT' in pending_keys.stdout"
   retries: 30
   delay: 10
   changed_when: false
