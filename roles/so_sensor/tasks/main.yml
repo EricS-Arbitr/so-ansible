@@ -724,7 +724,39 @@
   # 40 × 30s = 20 min ceiling.
   retries: 40
   delay: 30
-  until: so_status.rc == 0
+  # THE RETRY GATE MUST TEST WHAT THE ASSERT BELOW TESTS.
+  #
+  # This was `until: so_status.rc == 0`, and `so-status not yet available`
+  # EXITS 0. So on a node that had not finished converging, the gate was
+  # satisfied by the very first poll, the loop exited after one sample, and
+  # the assert -- which tests something strictly stronger -- failed on that
+  # sample. The retry budget that exists for exactly this convergence window
+  # was never spent. Not once.
+  #
+  # ss-pp-so 2026-09-02: so-sensor-ot and so-sensor-edge failed this way while
+  # so-sensor-corp passed, on an identical grid. corp passed by LUCK -- its
+  # early polls returned non-zero, which forced it to keep retrying until it
+  # was genuinely healthy. Checked afterwards, all five salt keys were
+  # Accepted, 4505/4506 open from every sensor, /opt/so and so-status present,
+  # and ot and edge had both logged "Successfully completed setup!" while corp
+  # -- the one that PASSED -- was the only node with a setup warning. The grid
+  # was fine and the CHECK was broken.
+  #
+  # That is also why this "worked before and does not now": whether a node's
+  # first sample is rc=0-but-unhappy or rc!=0 is pure timing, so the same code
+  # passes on a fast range and fails on a slow one.
+  #
+  # The assert one line down already says "an exit code is not proof". The
+  # gate directly above it was using the exit code as proof.
+  until: >-
+    so_status.rc == 0 and
+    ('adversaries cry' in so_status.stdout or 'STATUS: OK' in so_status.stdout)
+  # Ansible marks a task failed when `until` is exhausted, and failed_when
+  # does NOT override that -- so without this the play dies with a bare
+  # "maximum retries exceeded" and the assert never runs. Nothing is swallowed:
+  # the assert below is the real gate, and it prints the actual so-status
+  # output instead of a retry counter.
+  ignore_errors: true
 
 - name: Assert so-status actually reports a healthy grid (rc alone is not proof)
   ansible.builtin.assert:
