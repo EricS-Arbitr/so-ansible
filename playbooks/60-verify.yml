@@ -79,17 +79,38 @@
       register: traffic_gen
 
     - name: 15-sec tcpdump on monitor interface — packet count > 0 means GRE mirror is delivering
+      # PARSE THE NUMBER, DO NOT MATCH A PHRASE. This check has now been wrong
+      # in BOTH directions, and the token form is the only one that is wrong in
+      # neither.
+      #
+      #   v1  failed_when: "'0 packets captured' in pcap_out.stdout"
+      #       Substring. "100 packets captured" CONTAINS "0 packets captured",
+      #       so it failed precisely when the mirror was working -- PowerPlant
+      #       2026-08-04, all three sensors at 100 packets.
+      #
+      #   v2  failed_when: "'0 packets captured' in pcap_out.stdout_lines"
+      #       Exact line match, which cured that -- and FAILS OPEN. It fails
+      #       only on that one literal, so tcpdump erroring, the interface
+      #       being absent, or the wording changing all leave the string
+      #       missing, and a missing string meant PASS. The primary "is the
+      #       mirror delivering" check passed whenever it could not measure.
+      #       Found by the verification audit, 2026-09-04.
+      #
+      #   v3  the command emits its own token from the parsed count. Absence of
+      #       PCAP_OK is a failure whatever the cause, and no phrase is ever
+      #       compared against another phrase.
       ansible.builtin.shell: |
-        timeout 15 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1 | tail -5
+        out=$(timeout 15 tcpdump -i {{ so_monitor_interface }} -c 100 -nn 2>&1)
+        printf '%s\n' "$out" | tail -5
+        n=$(printf '%s\n' "$out" | grep -oE '[0-9]+ packets captured' | grep -oE '^[0-9]+' | head -1)
+        if [ -n "$n" ] && [ "$n" -gt 0 ]; then
+          echo "PCAP_OK_$n"
+        else
+          echo "PCAP_NONE_${n:-noreading}"
+        fi
       changed_when: false
       register: pcap_out
-      # EXACT LINE match, never a substring. tcpdump prints "100 packets
-      # captured", and `'0 packets captured' in stdout` is TRUE for that
-      # string -- so the substring form failed precisely when the mirror was
-      # WORKING (PowerPlant 2026-08-04, all three sensors at 100 packets).
-      # stdout_lines membership is an equality test per line and cannot do
-      # that. See UPSTREAM_FIXES 2026-08-04 (later 4).
-      failed_when: "'0 packets captured' in pcap_out.stdout_lines"
+      failed_when: "'PCAP_OK_' not in pcap_out.stdout"
 
     - name: report
       ansible.builtin.debug:
