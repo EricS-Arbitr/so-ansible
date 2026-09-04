@@ -35,7 +35,30 @@
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} remote {{ vyos_gre_remote_ip }}"
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} address {{ vyos_gre_local_addr }}/{{ vyos_gre_tunnel_prefix }}"
       - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} description 'so-mirror to sensor'"
+      - "set interfaces tunnel {{ vyos_gre_tunnel_iface }} mtu {{ vyos_mirror_tunnel_mtu }}"
     save: yes
+
+# CLAMP TCP MSS SO MIRRORED FRAMES FIT THE TUNNEL.
+# Full rationale, and the two approaches that were measured to fail, are in
+# defaults/main.yml under vyos_mirror_adjust_mss. Short version: `tc mirred`
+# copies whole Ethernet frames, a full-size one needs 1538 bytes of underlay
+# after GRE encapsulation, the underlay is 1500, and gretap drops rather than
+# fragments. Without this the sensor sees control packets and never a file.
+#
+# THIS TASK MUST RUN BEFORE tc.yml, AND THAT IS NOT COSMETIC.
+# Reconfiguring an interface flushes its ingress qdisc, taking the tc mirror
+# filters with it. Applying this clamp to a running range wiped the mirror on
+# both source interfaces (verified: `tc filter show dev ethN ingress` went to
+# zero mirred rules) and the next test measured a mirror that was not there.
+# tunnel.yml runs in play A and tc.yml in play B of 20-vyos.yml, so a normal
+# deploy re-applies tc afterwards and is safe. Any hand-edit that moves this
+# after the tc step silently disables mirroring.
+- name: Clamp TCP MSS on each mirrored interface
+  vyos.vyos.vyos_config:
+    lines:
+      - "set interfaces ethernet {{ item }} ip adjust-mss {{ vyos_mirror_adjust_mss }}"
+    save: yes
+  loop: "{{ vyos_mirror_source_interfaces }}"
 
 # `run` prefix is ONLY valid in configure mode; at the op-mode prompt
 # vyos_command uses, it's an invalid command. Just call the op-mode

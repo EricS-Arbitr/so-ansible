@@ -157,3 +157,95 @@
           Suricata is NOT evidence here -- it reads cooked capture natively
           and keeps alerting while Zeek sees nothing.
       when: "'GROWING' not in (zeek_conn.stdout | default(''))"
+
+    # --- FIDELITY, not just presence -----------------------------------
+    # Everything above this point asks "is the mirror delivering ANYTHING".
+    # Both checks below ask "is it delivering the traffic that MATTERS", and
+    # both would have caught a defect that sat undetected from the day the
+    # range was built.
+    #
+    # ss-pp-so 2026-09-03: mirrored full-size frames need 1538 bytes of
+    # underlay after GRE encapsulation and the underlay is 1500, so the
+    # tunnel silently dropped every one. Zeek logged connections, so-status
+    # was green, tcpdump on tun0 showed packets, conn.log grew -- and
+    # response_body_len was 0 for every HTTP download, files.log was empty,
+    # and Strelka had analysed nothing in 24 hours. capture_loss had been
+    # reporting ~50% the entire time and nothing read it.
+
+    - name: Read Zeek's own capture_loss (it has always known; nothing asked)
+      ansible.builtin.shell: |
+        set -o pipefail
+        tail -5 /nsm/zeek/logs/current/capture_loss.log 2>/dev/null \
+          | grep -o '"percent_lost":[0-9.]*' | cut -d: -f2 \
+          | sort -g | tail -1
+      args:
+        executable: /bin/bash
+      register: cap_loss
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if Zeek is missing a material fraction of the traffic
+      ansible.builtin.fail:
+        msg: |
+          {{ inventory_hostname }}: Zeek reports {{ cap_loss.stdout | trim }}%
+          capture loss (threshold {{ so_capture_loss_max }}%).
+
+          Zeek is seeing connections but not all of their bytes. Modest packet
+          loss is catastrophic for file reconstruction -- one missing segment
+          opens a gap and everything after it counts as missing until Zeek
+          resyncs, so ~16% packet loss produced ~64% missing file bytes on
+          this range. No file is ever complete, so nothing is extracted and
+          Strelka stays idle no matter how much traffic flows.
+
+          Check, in order:
+            1. tc mirror present on EVERY source interface --
+               `tc filter show dev <iface> ingress | grep -c mirred`.
+               Reconfiguring an interface flushes the ingress qdisc and takes
+               the mirror with it.
+            2. tunnel TX errors --
+               `show interfaces tunnel {{ so_monitor_interface }}` on the
+               router. A climbing error count means frames too large for the
+               tunnel; the MSS clamp in vyos_mirror should prevent that.
+            3. burst loss in the virtual switch, which appears in NO Linux
+               counter on either end. Compare tx_packets on the router's
+               tunnel against rx_packets on the sensor's over one transfer.
+      when:
+        - cap_loss.stdout | default('') | trim | length > 0
+        - (cap_loss.stdout | trim | float) > (so_capture_loss_max | float)
+
+    - name: Are FULL-SIZE frames arriving, or only the small ones?
+      ansible.builtin.shell: |
+        set -o pipefail
+        timeout 20 tcpdump -i {{ so_monitor_interface }} -nn greater 1400 2>&1 \
+          | grep -o '[0-9]* packets captured' | head -1 | cut -d' ' -f1
+      args:
+        executable: /bin/bash
+      register: big_frames
+      changed_when: false
+      failed_when: false
+
+    - name: Report full-size frame count
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ big_frames.stdout | default('0') | trim }}
+          frames >1400 bytes in 20s on {{ so_monitor_interface }}
+
+    # Deliberately a WARNING, not a failure. A genuinely idle segment can
+    # legitimately carry no large frames in a 20-second window, so failing on
+    # zero would fire on quiet ranges. Zero here alongside a capture_loss
+    # failure above is the fingerprint of the MTU defect; zero on its own
+    # means look at whether anything is transferring at all.
+    - name: Warn if no full-size frames were seen
+      ansible.builtin.debug:
+        msg: |
+          WARNING {{ inventory_hostname }}: zero frames >1400 bytes on
+          {{ so_monitor_interface }} in 20s.
+
+          On an active segment this is the signature of a tunnel that cannot
+          carry full-size frames -- the exact defect that made file extraction
+          impossible on this range. Payloads travel in full-size frames; if
+          none arrive, Zeek sees control traffic and never a file.
+
+          Confirm with a real transfer before acting: a quiet segment produces
+          the same reading. See vyos_mirror/defaults/main.yml.
+      when: (big_frames.stdout | default('0') | trim | int) == 0

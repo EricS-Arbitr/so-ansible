@@ -199,3 +199,11 @@ so_defend_exclusions: []
 so_defend_filters_src: "/opt/so/saltstack/local/salt/elasticfleet/files/soc/elastic-defend-custom-filters.yaml"
 
 so_defend_filters_out: "/opt/so/conf/elastic-fleet/defend-exclusions/rulesets/custom-filters"
+
+# --- Mirror fidelity threshold -------------------------------------------
+# Ceiling on Zeek's own capture_loss, asserted by playbooks/60-verify.yml.
+# 5% is generous for a working mirror; this range sat at ~50% from the day it
+# was built because nothing read the file. Lives here rather than in
+# roles/vyos_mirror/defaults/ because 60-verify targets [so_sensor] and does
+# not include that role.
+so_capture_loss_max: 5

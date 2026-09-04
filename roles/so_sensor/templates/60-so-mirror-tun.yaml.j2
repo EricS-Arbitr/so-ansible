@@ -20,8 +20,14 @@ network:
       remote: {{ so_gre_remote_underlay }}
       addresses:
         - {{ so_gre_tunnel_local }}/{{ so_gre_tunnel_prefix }}
-      # 1500 - 20 (outer IP) - 4 (GRE) - 14 (inner Ethernet). 14 bytes less
-      # than the L3 gre tunnel this replaced, because the frame now carries
-      # its L2 header. SO's pillar asks for mtu 9000 -- it expects a
-      # jumbo-capable monitor path, which a 1500-byte underlay cannot give.
-      mtu: 1462
+      # 1500, matching the router side. The kernel's gretap default here is
+      # 1462 (1500 - 20 outer IP - 4 GRE - 14 inner Ethernet), which is the
+      # largest frame the tunnel can carry unaided -- and is 52 bytes short of
+      # the 1514-byte frames `tc mirred` actually copies. The router now
+      # clamps TCP MSS to keep frames under that ceiling (see
+      # vyos_mirror/defaults/main.yml); this side is raised to match so a full
+      # frame is accepted rather than refused at the device.
+      #
+      # SO's own pillar asks for mtu 9000 -- it assumes a jumbo monitor path,
+      # which a 1500-byte routed underlay cannot provide.
+      mtu: 1500
