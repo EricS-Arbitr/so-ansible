@@ -97,6 +97,101 @@ turn you change any entry's status.
 
 ----
 
+## 2026-09-07 · bug · so-setup deletes the docker proxy drop-in mid-run, then seeds its registry from ghcr.io over whatever DNS is left
+
+**Symptom.** ss-pp-stacked failed three deploy attempts (7h22m). so-manager
+reported `ok=78 changed=8 failed=1 ignored=1`; every other host was clean.
+`so-status` showed `so-dockerregistry running` and the other twelve
+containers `missing`. `/nsm/docker-registry` was 8.0K with **0**
+repositories, and `docker images` held exactly one image.
+
+**Detection.** `/root/so-setup.log`:
+
+```
+Failed to pull ghcr.io/security-onion-solutions/registry:3.0.0 ...
+  dial tcp: lookup ghcr.io on 172.16.2.7:53: server misbehaving   (4 attempts)
+Comment: One or more requisite failed: registry.enabled.so-dockerregistry
+Failed to pull so-manager:5000/... : dial tcp 127.0.0.1:5000: connect: connection refused
+```
+
+`172.16.2.7` is pp-dc01, the in-range DC, which has no path to the internet.
+
+The proxy was configured — but not at that moment. File mtimes prove the
+ordering:
+
+| file | mtime |
+|---|---|
+| `/root/so-setup.log` (end of setup) | 2026-09-05 04:22:45 |
+| `/etc/systemd/system/docker.service.d/http-proxy.conf` | 2026-09-05 **05:31:40** |
+| same file on so-search / all three sensors | 2026-09-05 **00:41:13-15** |
+
+The four nodes that never ran so-setup still carry their original 00:41
+drop-in. Only the manager's is newer — and since `ansible.builtin.copy`
+does not touch mtime when content is unchanged, the file must have been
+**absent** when the next attempt ran. **so-setup deletes
+`/etc/systemd/system/docker.service.d/` on its "Old setup detected"
+reinstall path.** Docker was left with no proxy, fell back to direct DNS,
+and hit the DC.
+
+Confirmed by inversion against ss-pp-so, which succeeded: it has *no*
+proxy drop-in at all and *cannot* resolve ghcr.io today, yet holds 7.2 GB
+and 46 image tags — it simply won the race on the day it was built. The
+range that was better configured is the one that failed.
+
+**Why three attempts changed nothing.** so-setup exited 0 despite writing
+its own `/root/failure` marker, and our role wrote
+`/opt/so/state/setup-completed` one minute later (04:23). Attempts 2 and 3
+read that marker, skipped the 45-90 min install, went straight to the
+30-minute `so-status` wait and failed. The one broken step was never
+retried.
+
+**Fix (overlay).** Stop fetching images from the internet at all. so-setup
+checks local content before any network call —
+`docker_seed_registry()` extracts
+`/nsm/docker-registry/docker/registry.tar` and `import_registry_docker()`
+loads `registry_image.tar` — which is how the airgap ISO installs. Build
+both on the ansible controller (the only host with mgmt-plane egress) and
+serve them from the existing nginx mirror:
+
+- `so_apt_mirror/tasks/registry_content.yml` + `templates/build_so_registry.sh.j2`
+- `so_manager/tasks/registry_seed.yml`, included **immediately before** the
+  so-setup call — staged afterwards the files do nothing.
+
+Uses `skopeo`, not `docker pull`: docker unpacks layers (~28 GB for this
+set) and the controller has 25 GB free, while skopeo streams compressed
+blobs, peaking at ~14.4 GB. The registry image is `docker load`ed from a
+skopeo-produced archive so the controller's docker daemon never needs a
+proxy either — the same failure class, avoided by construction.
+
+**Also fixed: the marker that made this unrecoverable.**
+`so_setup_can_skip` now also requires the registry to hold
+`so_registry_min_repos` (22) repositories, and a hard gate fails on a short
+registry *before* `setup-completed` is written. Salt being installed says
+nothing about images having arrived. Same lesson as the 2026-09-03
+verification gates: a gate must test what the step behind it needs.
+
+**Workaround (already-broken range).** Egress via the proxy works once the
+drop-in is back, so the registry can be seeded in place — pull each
+`ghcr.io/security-onion-solutions/*` image, retag `so-manager:5000/...`,
+push. The highstate polls every 15 minutes and converges on its own; no
+redeploy needed.
+
+**Upstream candidates.**
+1. so-setup should not delete `/etc/systemd/system/docker.service.d/`, or
+   should restore proxy configuration after reinstalling docker. Silently
+   removing the operator's egress config mid-install is surprising and
+   leaves no trace in the log.
+2. so-setup should exit non-zero when `docker_seed_registry()` fails. It
+   currently writes `/root/failure`, logs the cascade, and exits 0.
+3. The `registry.tar` / `registry_image.tar` local-seed path deserves
+   documentation outside the ISO flow — it is the cleanest way to run a
+   network install in an air-gapped range, and nothing points to it.
+
+**Status: PROPOSED** — written and committed 2026-09-07, not yet exercised
+on a deploy. Verify on the next fresh ss-pp-stacked build: the controller
+should publish `so-registry-2.4.211.tar` (~7.2 GB) and so-manager should
+reach 22 repositories with no ghcr.io traffic in `/root/so-setup.log`.
+
 ## 2026-08-17 · bug · Mirror tunnel was `gre`, not `gretap` — Zeek discarded 100% of frames
 
 **Originated here and was inherited by PowerPlant and airfield.** Found on
