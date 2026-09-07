@@ -308,3 +308,8 @@ so_registry_min_repos: 22
 # inside so-setup. Real sizes 2026-09-07: 7.2 GB and ~19 MB.
 so_registry_tar_min_bytes: 6000000000
 so_registry_image_tar_min_bytes: 10000000
+
+# Build log for the controller-side container-image build. In group_vars
+# rather than so_apt_mirror/defaults because the wait play at the top of
+# playbooks/40-manager.yml reads it and does not include that role.
+so_registry_build_log: /var/log/so_registry_build.log

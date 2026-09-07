@@ -100,64 +100,20 @@
     - so_registry_needs_build
     - so_registry_artifact_url | length == 0
 
-- name: Registry content — wait for the build
-  ansible.builtin.async_status:
-    jid: "{{ so_registry_build_async.ansible_job_id }}"
-  register: so_registry_build_result
-  until: so_registry_build_result.finished
-  retries: "{{ (so_registry_build_timeout | int / 30) | int }}"
-  delay: 30
-  when:
-    - so_registry_needs_build
-    - so_registry_artifact_url | length == 0
-
-- name: Registry content — read the build log
-  ansible.builtin.slurp:
-    src: "{{ so_registry_build_log }}"
-  register: so_registry_build_log_raw
-  failed_when: false
-  when:
-    - so_registry_needs_build
-    - so_registry_artifact_url | length == 0
-
-# Positive proof. The script's exit code is checked too, but BUILD_OK is
-# emitted only after the repository count has been verified, so it proves
-# the artifact is complete rather than merely that tar returned 0.
-- name: Registry content — fail unless the build proved itself
-  ansible.builtin.fail:
-    msg: |
-      SO registry build did not complete on the controller.
-      rc={{ so_registry_build_result.rc | default('?') }}
-      Log tail ({{ so_registry_build_log }}):
-      {{ (so_registry_build_log_raw.content | b64decode).split('\n')[-25:] | join('\n')
-         if so_registry_build_log_raw.content is defined else '<log unreadable>' }}
-  when:
-    - so_registry_needs_build
-    - so_registry_artifact_url | length == 0
-    - >-
-      so_registry_build_result.rc | default(1) != 0
-      or 'BUILD_OK' not in (so_registry_build_log_raw.content | b64decode
-                            if so_registry_build_log_raw.content is defined else '')
-
-# --- Both paths converge here --------------------------------------------
-# The mirror is the contract with the SO nodes; prove it over HTTP exactly
-# as the SO source and ETOPEN tarballs are proved, because a file on disk
-# that nginx will not serve is not a working mirror.
-
-- name: Registry content — smoke test both artifacts over HTTP
-  ansible.builtin.uri:
-    url: "{{ so_mirror_url }}/so-source/{{ item }}"
-    method: HEAD
-    status_code: 200
-  loop:
-    - "{{ so_registry_tar_name }}"
-    - "{{ so_registry_image_tar_name }}"
-  loop_control:
-    label: "{{ item }}"
-
-- name: Registry content — report
+- name: Registry content — report (build continues in the background)
   ansible.builtin.debug:
     msg: >-
-      SO container images published at {{ so_mirror_url }}/so-source/
-      ({{ so_registry_tar_name }}, {{ so_registry_image_tar_name }}).
-      SO nodes now seed their registry over in-range HTTP with no internet.
+      {{ 'Container images downloaded from ' + so_registry_artifact_url
+         if so_registry_artifact_url | length > 0
+         else 'Container-image build RUNNING IN BACKGROUND on the controller
+               (log: ' + so_registry_build_log + '). It is deliberately NOT
+               awaited here so the range baseline can proceed while 7.2 GB
+               downloads. playbooks/40-manager.yml blocks on it before
+               so_manager needs it.' }}
+  when: so_registry_needs_build
+
+# NOTE: no HTTP smoke test here on the build path — the artifacts do not
+# exist yet. Proof that they landed AND are served lives in the wait play at
+# the top of playbooks/40-manager.yml, which is the last moment before
+# anything consumes them. Running 10-mirror.yml standalone therefore starts
+# the build and returns; that is intended.

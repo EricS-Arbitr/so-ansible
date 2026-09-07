@@ -16,8 +16,13 @@
 #   ansible-playbook -i hosts playbooks/75-endpoint.yml
 # =========================================================================
 
-- import_playbook: playbooks/00-setup.yml
+# Mirror FIRST — fail fast (it is a hard prereq for 30/40/50) and it
+# kicks the 7.2 GB container-image build off in the BACKGROUND, so the
+# baseline runs while it downloads. 40-manager blocks on the artifacts.
+# Safe to hoist: nothing ahead of it ever targeted the controller.
 - import_playbook: playbooks/10-mirror.yml
+
+- import_playbook: playbooks/00-setup.yml
 - import_playbook: playbooks/20-vyos.yml
 - import_playbook: playbooks/30-prereqs.yml
 - import_playbook: playbooks/40-manager.yml
