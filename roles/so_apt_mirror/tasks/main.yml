@@ -274,10 +274,19 @@
   ansible.builtin.include_tasks: airgap_content.yml
   when: so_airgap_mode | bool
 
+# Container images — the fifth and largest artifact class, and until
+# 2026-09-07 the only one the SO nodes fetched from the internet themselves.
+# Unconditional: this is the mechanism that makes in-play systems
+# internet-free, so it must not hide behind a feature flag.
+- name: Stage SO container registry content on the mirror
+  ansible.builtin.include_tasks: registry_content.yml
+
+
 - name: Report mirror status
   ansible.builtin.debug:
     msg: |
       so-mirror OK on http://{{ so_mirror_host }}:{{ so_mirror_port }}/
         SO source: /so-source/securityonion-{{ so_git_ref[:12] }}.tar.gz
       {% if etopen_present.stat.exists %}  ETOPEN rules: /so-source/{{ so_bundled_rules_filename }}
-      {% endif %}{% if so_airgap_mode %}  Airgap content: {{ so_airgap_repos | map(attribute='name') | join(', ') }}{% endif %}
+      {% endif %}{% if so_airgap_mode %}  Airgap content: {{ so_airgap_repos | map(attribute='name') | join(', ') }}
+      {% endif %}  Container images: /so-source/{{ so_registry_tar_name }} + {{ so_registry_image_tar_name }}

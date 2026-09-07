@@ -217,3 +217,94 @@ so_capture_loss_min_acks: 200
 # loss remains unresolved -- see the task comment in playbooks/60-verify.yml.
 # Flip to true once it is fixed, turning this into a regression gate.
 so_capture_loss_fatal: false
+
+# =========================================================================
+# Container image registry content — the 5th artifact class
+# =========================================================================
+# Until 2026-09-07 this was the ONLY install artifact the SO nodes fetched
+# from the internet THEMSELVES. so-setup's docker_seed_registry() pulled 22
+# images straight from ghcr.io on the manager, retagged them
+# so-manager:5000/... and pushed them into its own registry. Every other
+# class (SO source, ETOPEN, sigma/yara/playbook repos) already came from the
+# controller's nginx mirror, per the rule in so_apt_mirror/airgap_content.yml:
+# the controller is the only host with mgmt-plane egress.
+#
+# WHAT THAT COST US — ss-pp-stacked, 2026-09-05
+# ---------------------------------------------
+# so-setup DELETES /etc/systemd/system/docker.service.d/ on its reinstall
+# path. The docker proxy drop-in so_base writes was therefore GONE by the
+# time the seeding ran (proved by mtime: drop-in 05:31:40, so-setup.log
+# 04:22:45 — the drop-in was recreated by the NEXT attempt, 69 min later).
+# Docker fell back to direct DNS, hit the in-range DC at 172.16.2.7 which
+# cannot resolve ghcr.io, and all four pull attempts 404'd. The registry
+# stayed empty (8.0K, 0 repositories), 12 of 13 containers were never
+# created, and because setup-completed had already been written at 04:23 the
+# next two attempts SKIPPED so-setup entirely — 7h22m, never retrying the one
+# step that was broken.
+#
+# THE SUPPORTED MECHANISM
+# -----------------------
+# so-setup checks local files before any network call:
+#   docker_seed_registry()   -> tar xvf /nsm/docker-registry/docker/registry.tar
+#   import_registry_docker() -> docker load -i .../registry_image.tar
+# That is how the airgap ISO installs. We reproduce it from the mirror, so
+# in-play systems now have ZERO internet dependency for images. The
+# controller is the only host that reaches ghcr.io, and only to BUILD these.
+#
+# END STATE (Eric, 2026-09-07): both artifacts hosted on the in-platform
+# Nexus. Set so_registry_artifact_url to that base URL and the controller
+# DOWNLOADS them instead of building. No other change required.
+so_registry_artifact_url: ""
+
+# Tags carried by the SO container set. MUST track so_git_ref — the salt
+# states reference these literally, so a mismatch means the highstate asks
+# the local registry for a tag it does not have and every container stays
+# `missing`: the exact failure this mechanism exists to prevent.
+so_registry_image_version: "2.4.211"
+so_registry_registry_version: "3.0.0"
+so_registry_elasticsearch_version: "9.0.8"
+
+# Versioned on the mirror so a stale blob cannot masquerade as a current one.
+# Renamed to registry.tar / registry_image.tar on the node, because those are
+# the names so-setup looks for.
+so_registry_tar_name: "so-registry-{{ so_registry_image_version }}.tar"
+so_registry_image_tar_name: "so-registry-image-{{ so_registry_registry_version }}.tar"
+
+# Verified against a healthy 2.4.211 manager (ss-pp-so, 2026-09-07): the
+# registry held exactly 22 repositories totalling 7.2 GB. so-elasticsearch
+# carries Elastic's own version, NOT the SO tag.
+so_registry_images:
+  - "so-elastalert:{{ so_registry_image_version }}"
+  - "so-elastic-agent:{{ so_registry_image_version }}"
+  - "so-elastic-agent-builder:{{ so_registry_image_version }}"
+  - "so-elastic-fleet-package-registry:{{ so_registry_image_version }}"
+  - "so-elasticsearch:{{ so_registry_elasticsearch_version }}"
+  - "so-hydra:{{ so_registry_image_version }}"
+  - "so-idh:{{ so_registry_image_version }}"
+  - "so-influxdb:{{ so_registry_image_version }}"
+  - "so-kafka:{{ so_registry_image_version }}"
+  - "so-kibana:{{ so_registry_image_version }}"
+  - "so-kratos:{{ so_registry_image_version }}"
+  - "so-logstash:{{ so_registry_image_version }}"
+  - "so-nginx:{{ so_registry_image_version }}"
+  - "so-pcaptools:{{ so_registry_image_version }}"
+  - "so-redis:{{ so_registry_image_version }}"
+  - "so-soc:{{ so_registry_image_version }}"
+  - "so-steno:{{ so_registry_image_version }}"
+  - "so-strelka-backend:{{ so_registry_image_version }}"
+  - "so-strelka-manager:{{ so_registry_image_version }}"
+  - "so-suricata:{{ so_registry_image_version }}"
+  - "so-telegraf:{{ so_registry_image_version }}"
+  - "so-zeek:{{ so_registry_image_version }}"
+
+# Hard gate on the node. A registry with fewer repositories than this did not
+# seed correctly; failing here costs a re-run, failing downstream costs the
+# 30-minute so-status timeout and a misleading error.
+so_registry_min_repos: 22
+
+# Sanity floors for the staged artifacts. Not checksums — the point is to
+# catch an nginx error page or a truncated transfer landing as a "successful"
+# get_url, which would otherwise only surface as an unreadable tar deep
+# inside so-setup. Real sizes 2026-09-07: 7.2 GB and ~19 MB.
+so_registry_tar_min_bytes: 6000000000
+so_registry_image_tar_min_bytes: 10000000

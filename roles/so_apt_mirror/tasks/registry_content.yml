@@ -1,0 +1,163 @@
+---
+# =========================================================================
+# registry_content.yml — publish SO's container images on the mirror
+# =========================================================================
+# Runs on the ANSIBLE CONTROLLER, the only host with mgmt-plane egress —
+# the same rule airgap_content.yml already follows for the sigma/yara/
+# playbook repos. After this, in-play systems fetch container images over
+# in-range HTTP and never touch the internet.
+#
+# See group_vars/all/security_onion.yml for the full incident writeup
+# (ss-pp-stacked 2026-09-05: so-setup deletes the docker proxy drop-in
+# mid-run, docker fell back to the in-range DC for DNS, registry stayed
+# empty, 7h22m of retries that skipped the broken step).
+#
+# Idempotent on the ARTIFACT, not on a marker: if both blobs are already on
+# the mirror we do nothing, so a re-run costs one stat. Delete them on the
+# controller to force a rebuild — the same deliberate act that refreshes
+# detection content.
+# =========================================================================
+
+- name: Registry content — is it already on the mirror?
+  ansible.builtin.stat:
+    path: "{{ so_mirror_root }}/so-source/{{ item }}"
+  register: so_registry_present
+  loop:
+    - "{{ so_registry_tar_name }}"
+    - "{{ so_registry_image_tar_name }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Registry content — decide whether a build is needed
+  ansible.builtin.set_fact:
+    so_registry_needs_build: >-
+      {{ so_registry_present.results | rejectattr('stat.exists') | list | length > 0 }}
+
+- name: Registry content — report
+  ansible.builtin.debug:
+    msg: >-
+      Registry artifacts {{ 'MISSING — will ' + ('download from ' + so_registry_artifact_url
+      if so_registry_artifact_url | length > 0 else 'build from ghcr.io via the proxy')
+      if so_registry_needs_build else 'already present; nothing to do' }}.
+
+# --- Path A: prebuilt artifacts (the Nexus end state) --------------------
+# When so_registry_artifact_url is set this is the whole story: two
+# downloads, no docker, no skopeo, no egress to ghcr.io. Switching to it is
+# a one-variable change once Eric has write access to Nexus.
+
+- name: Registry content — download prebuilt artifacts
+  ansible.builtin.get_url:
+    url: "{{ so_registry_artifact_url }}/{{ item }}"
+    dest: "{{ so_mirror_root }}/so-source/{{ item }}"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+    timeout: 120
+  loop:
+    - "{{ so_registry_tar_name }}"
+    - "{{ so_registry_image_tar_name }}"
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length > 0
+
+# --- Path B: build from ghcr.io (today) ----------------------------------
+
+- name: Registry content — install skopeo + docker (build path only)
+  ansible.builtin.apt:
+    name:
+      - skopeo
+      - docker.io
+    state: present
+    update_cache: yes
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+- name: Registry content — render the build script
+  ansible.builtin.template:
+    src: build_so_registry.sh.j2
+    dest: /usr/local/sbin/build_so_registry.sh
+    mode: '0750'
+    owner: root
+    group: root
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+# Async because this moves 7.2 GB through the proxy. Backgrounded with a log
+# rather than a blocking shell so the run is inspectable while it works and
+# an SSH hiccup does not orphan it.
+- name: Registry content — build (7.2 GB via proxy; 20-60 min on first run)
+  ansible.builtin.shell: /usr/local/sbin/build_so_registry.sh > {{ so_registry_build_log }} 2>&1
+  args:
+    executable: /bin/bash
+  async: "{{ so_registry_build_timeout }}"
+  poll: 0
+  register: so_registry_build_async
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+- name: Registry content — wait for the build
+  ansible.builtin.async_status:
+    jid: "{{ so_registry_build_async.ansible_job_id }}"
+  register: so_registry_build_result
+  until: so_registry_build_result.finished
+  retries: "{{ (so_registry_build_timeout | int / 30) | int }}"
+  delay: 30
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+- name: Registry content — read the build log
+  ansible.builtin.slurp:
+    src: "{{ so_registry_build_log }}"
+  register: so_registry_build_log_raw
+  failed_when: false
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+
+# Positive proof. The script's exit code is checked too, but BUILD_OK is
+# emitted only after the repository count has been verified, so it proves
+# the artifact is complete rather than merely that tar returned 0.
+- name: Registry content — fail unless the build proved itself
+  ansible.builtin.fail:
+    msg: |
+      SO registry build did not complete on the controller.
+      rc={{ so_registry_build_result.rc | default('?') }}
+      Log tail ({{ so_registry_build_log }}):
+      {{ (so_registry_build_log_raw.content | b64decode).split('\n')[-25:] | join('\n')
+         if so_registry_build_log_raw.content is defined else '<log unreadable>' }}
+  when:
+    - so_registry_needs_build
+    - so_registry_artifact_url | length == 0
+    - >-
+      so_registry_build_result.rc | default(1) != 0
+      or 'BUILD_OK' not in (so_registry_build_log_raw.content | b64decode
+                            if so_registry_build_log_raw.content is defined else '')
+
+# --- Both paths converge here --------------------------------------------
+# The mirror is the contract with the SO nodes; prove it over HTTP exactly
+# as the SO source and ETOPEN tarballs are proved, because a file on disk
+# that nginx will not serve is not a working mirror.
+
+- name: Registry content — smoke test both artifacts over HTTP
+  ansible.builtin.uri:
+    url: "{{ so_mirror_url }}/so-source/{{ item }}"
+    method: HEAD
+    status_code: 200
+  loop:
+    - "{{ so_registry_tar_name }}"
+    - "{{ so_registry_image_tar_name }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Registry content — report
+  ansible.builtin.debug:
+    msg: >-
+      SO container images published at {{ so_mirror_url }}/so-source/
+      ({{ so_registry_tar_name }}, {{ so_registry_image_tar_name }}).
+      SO nodes now seed their registry over in-range HTTP with no internet.

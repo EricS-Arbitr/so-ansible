@@ -1,0 +1,120 @@
+---
+# =========================================================================
+# registry_seed.yml — stage SO's container images BEFORE so-setup runs
+# =========================================================================
+# so-setup checks for local content before it will touch the network:
+#
+#   docker_seed_registry()   -> if [ -f /nsm/docker-registry/docker/registry.tar ]
+#                                  tar xvf ... -C /nsm/docker-registry/docker
+#   import_registry_docker() -> if [ -f .../registry_image.tar ]
+#                                  docker load -i ...
+#
+# Put both files there and the ghcr.io path is never reached. That is how
+# the airgap ISO installs; we reproduce it from the controller's mirror.
+#
+# ORDERING IS THE WHOLE POINT — this MUST run before the so-setup call. It
+# cannot be asserted afterwards like airgap mode, because by then so-setup
+# has already made its download decision. See the incident writeup in
+# group_vars/all/security_onion.yml.
+#
+# so-setup DELETES registry.tar after extracting it, so a re-run finds the
+# tar gone and the store populated. Gate on the STORE, never on the tar.
+# =========================================================================
+
+- name: Registry seed — count repositories already in the local store
+  ansible.builtin.shell: |
+    d=/nsm/docker-registry/docker/registry/v2/repositories/security-onion-solutions
+    if [ -d "$d" ]; then ls "$d" | wc -l; else echo 0; fi
+  args:
+    executable: /bin/bash
+  register: so_registry_repo_count
+  changed_when: false
+
+- name: Registry seed — decide whether staging is needed
+  ansible.builtin.set_fact:
+    so_registry_already_seeded: >-
+      {{ (so_registry_repo_count.stdout | trim | int) >= (so_registry_min_repos | int) }}
+
+- name: Registry seed — report
+  ansible.builtin.debug:
+    msg: >-
+      Local registry store holds {{ so_registry_repo_count.stdout | trim }}
+      repositories (need {{ so_registry_min_repos }}) —
+      {{ 'already seeded, skipping staging' if so_registry_already_seeded
+         else 'staging from ' + so_mirror_url }}
+
+- name: Registry seed — ensure the seed directory exists
+  ansible.builtin.file:
+    path: /nsm/docker-registry/docker
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  when: not so_registry_already_seeded
+
+# use_proxy: no — this is in-range HTTP to the controller. Routing it through
+# the mgmt proxy would be both wrong and, in a zero-egress range, fatal.
+# Same treatment as the SO source tarball in so_base.
+- name: Registry seed — fetch the registry container image archive
+  ansible.builtin.get_url:
+    url: "{{ so_mirror_url }}/so-source/{{ so_registry_image_tar_name }}"
+    dest: /nsm/docker-registry/docker/registry_image.tar
+    mode: '0644'
+    owner: root
+    group: root
+    use_proxy: no
+    timeout: 120
+  when: not so_registry_already_seeded
+
+- name: Registry seed — fetch the registry content archive (~7.2 GB)
+  ansible.builtin.get_url:
+    url: "{{ so_mirror_url }}/so-source/{{ so_registry_tar_name }}"
+    dest: /nsm/docker-registry/docker/registry.tar
+    mode: '0644'
+    owner: root
+    group: root
+    use_proxy: no
+    timeout: 1800
+  when: not so_registry_already_seeded
+
+# Positive proof that what landed is plausibly the artifact, not an nginx
+# 404 body or a truncated transfer. get_url follows redirects and writes
+# whatever it receives; a 200-with-error-page would otherwise sail through
+# and only surface as an unreadable tar 40 minutes into so-setup.
+- name: Registry seed — stat what actually landed
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: so_registry_staged
+  loop:
+    - /nsm/docker-registry/docker/registry.tar
+    - /nsm/docker-registry/docker/registry_image.tar
+  loop_control:
+    label: "{{ item }}"
+  when: not so_registry_already_seeded
+
+- name: Registry seed — fail if the content archive is implausibly small
+  ansible.builtin.fail:
+    msg: |
+      {{ item.item }} is {{ item.stat.size | default(0) }} bytes on
+      {{ inventory_hostname }} — far below the expected size. The mirror
+      almost certainly served an error page or the transfer was truncated.
+      Check {{ so_mirror_url }}/so-source/ on the controller.
+  loop: "{{ so_registry_staged.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('?') }}"
+  when:
+    - not so_registry_already_seeded
+    - item.stat.exists | default(false)
+    - >-
+      (item.stat.size | default(0)) <
+      (so_registry_tar_min_bytes if 'registry.tar' in item.item
+       else so_registry_image_tar_min_bytes)
+
+- name: Registry seed — report staged
+  ansible.builtin.debug:
+    msg: >-
+      Staged registry.tar
+      ({{ (so_registry_staged.results[0].stat.size / 1073741824) | round(2) }} GB)
+      and registry_image.tar. so-setup will seed locally and never contact
+      ghcr.io.
+  when: not so_registry_already_seeded
