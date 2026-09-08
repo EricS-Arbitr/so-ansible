@@ -39,8 +39,12 @@
   tasks:
     - name: Poll for the registry artifacts (build may still be running)
       ansible.builtin.shell: |
-        tar={{ so_mirror_root }}/so-source/{{ so_registry_tar_name }}
-        img={{ so_mirror_root }}/so-source/{{ so_registry_image_tar_name }}
+        # Wait on the CHECKSUMS, not the tars. The build publishes them
+        # last, after the tars are already moved into place, so a .sha256
+        # existing proves the artifact beside it is complete. Waiting on the
+        # tar itself would only prove a file had been created.
+        tar={{ so_mirror_root }}/so-source/{{ so_registry_tar_name }}.sha256
+        img={{ so_mirror_root }}/so-source/{{ so_registry_image_tar_name }}.sha256
         if [ -f "$tar" ] && [ -f "$img" ]; then echo REGISTRY_READY; exit 0; fi
         # Fail fast instead of burning the full retry budget on a dead build.
         if grep -q BUILD_FAIL {{ so_registry_build_log }} 2>/dev/null; then
@@ -81,6 +85,8 @@
       loop:
         - "{{ so_registry_tar_name }}"
         - "{{ so_registry_image_tar_name }}"
+        - "{{ so_registry_tar_name }}.sha256"
+        - "{{ so_registry_image_tar_name }}.sha256"
       loop_control:
         label: "{{ item }}"
 

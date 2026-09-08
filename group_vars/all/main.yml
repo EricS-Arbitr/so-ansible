@@ -302,12 +302,12 @@ so_registry_images:
 # 30-minute so-status timeout and a misleading error.
 so_registry_min_repos: 22
 
-# Sanity floors for the staged artifacts. Not checksums — the point is to
-# catch an nginx error page or a truncated transfer landing as a "successful"
-# get_url, which would otherwise only surface as an unreadable tar deep
-# inside so-setup. Real sizes 2026-09-07: 7.2 GB and ~19 MB.
-so_registry_tar_min_bytes: 6000000000
-so_registry_image_tar_min_bytes: 10000000
+# How many resume passes the node gets on the 7.2 GB artifact. Replaced the
+# old size-floor heuristic, which could only DETECT a truncated transfer --
+# it could not finish one. Each pass resumes where the last stopped, so the
+# worst observed cutoff (~2 GB per pass on a cold cache) completes in four.
+# Eight leaves margin without letting a genuinely dead link spin forever.
+so_registry_download_passes: 8
 
 # Build log for the controller-side container-image build. In group_vars
 # rather than so_apt_mirror/defaults because the wait play at the top of
