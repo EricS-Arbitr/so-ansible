@@ -70,7 +70,15 @@
       - skopeo
       - docker.io
     state: present
-    update_cache: yes
+    # update_cache: NO. RC_NG_Ansible ships stale apt.puppet.com +
+    # apt.puppetlabs.com sources with expired signing keys; apt-get update
+    # returns non-zero on those and the apt module turns that into
+    # "Failed to update apt cache: unknown reason". main.yml already
+    # refreshed the cache via the shell task that tolerates it -- this is
+    # the same reason `Install nginx + git` sets update_cache: no.
+    # Regression 2026-09-07: this task shipped with `yes` and failed every
+    # ss-pp-so attempt on the controller.
+    update_cache: no
   when:
     - so_registry_needs_build
     - so_registry_artifact_url | length == 0
