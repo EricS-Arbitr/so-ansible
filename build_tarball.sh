@@ -177,6 +177,65 @@ if [ -x "$SO_ANSIBLE/verify_defend_filters.py" ] && command -v python3 >/dev/nul
   fi
 fi
 
+# HARD GATE. A task with two `when:` keys loses the first one -- YAML keeps the
+# last value and discards the earlier one without complaint, so a condition you
+# wrote is simply not running, and the file reads correctly because both lines
+# are right there. roles/dcpromo shipped an AD-services gate whose service
+# condition had been dead for months; the probe feeding it ran every deploy and
+# was read by nothing.
+#
+# yaml.safe_load() accepts duplicates silently, so no checker built on it can
+# see this. Ansible warns at RUN time, on stderr, one line deep in a
+# 26,000-line log. That is not a gate. This is.
+if [ -x "$SO_ANSIBLE/verify_dup_keys.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying no duplicate YAML keys ==="
+  if ! python3 "$SO_ANSIBLE/verify_dup_keys.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with logic that silently does not run."
+    exit 1
+  fi
+fi
+
+# HARD GATE. A task keyword indented one level too deep becomes a module
+# ARGUMENT instead: the keyword is never applied, so a `when` never gates, a
+# `loop` never loops, a `register` never registers.
+#
+# ss-pp-stacked 2026-09-20 nearly shipped a `when` indented under
+# ansible.builtin.fail, which would have fired that fail task on every host in
+# the play -- a targeted guard turned into a range-wide outage. Valid YAML, no
+# duplicate keys, balanced quotes, so nothing else could see it, and it reads
+# correctly at a glance: both lines spelled right, only the column wrong.
+if [ -x "$SO_ANSIBLE/verify_task_keywords.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying task keywords are not module arguments ==="
+  if ! python3 "$SO_ANSIBLE/verify_task_keywords.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball with keywords that will not apply."
+    exit 1
+  fi
+fi
+
+# HARD GATE. An apostrophe in a shell or PowerShell comment inside a free-form
+# module argument makes the PLAY FAIL TO LOAD -- not one task, the whole run,
+# before any host is touched. Ansible runs split_args() over those arguments
+# and counts quotes; it does not know the script has comments.
+if [ -x "$SO_ANSIBLE/verify_shell_args.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying free-form shell arguments ==="
+  if ! python3 "$SO_ANSIBLE/verify_shell_args.py" "$STAGE"; then
+    echo ""
+    echo "ERROR: refusing to build a tarball whose plays cannot load."
+    exit 1
+  fi
+fi
+
+if [ -x "$SO_ANSIBLE/verify_vars.py" ] && command -v python3 >/dev/null 2>&1; then
+  echo ""
+  echo "=== Verifying Jinja var references ==="
+  python3 "$SO_ANSIBLE/verify_vars.py" "$STAGE" || true
+fi
+
 # --- Pack ------------------------------------------------------------------
 
 cd "$STAGE"
